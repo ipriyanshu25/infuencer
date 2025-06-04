@@ -17,6 +17,7 @@ exports.register = async (req, res) => {
     socialMedia,
     audience,
     countryId,   // ← the frontend will now send `countryId`
+    callingId,  // ← this is the calling code like "+1" for US
     bio
   } = req.body;
 
@@ -29,11 +30,16 @@ exports.register = async (req, res) => {
 
     // 2. Look up the country document by its _id
     const countryDoc = await Country.findById(countryId);
+    const callingDoc = await Country.findById(callingId);
+    if (!callingDoc) {
+      return res.status(400).json({ message: 'Invalid calling code ID' });
+    }
     if (!countryDoc) {
       return res.status(400).json({ message: 'Invalid country ID' });
     }
     // Grab the countryName from that document
     const countryName = countryDoc.countryName;
+    const callingCode = callingDoc.callingCode; // Assuming you want to store this too
 
     // 3. Create new influencer, storing the countryName (not the ObjectId)
     const newInfluencer = new Influencer({
@@ -43,7 +49,10 @@ exports.register = async (req, res) => {
       phone,
       socialMedia,
       audience,
+      countryId: countryId, // ← store the ObjectId for reference
+      callingId:callingId,      // ← store the calling code like "+1"
       county: countryName,  // ← store the human-readable name
+      callingcode: callingCode, // ← store the calling code like "+1"
       bio
     });
 
@@ -51,8 +60,7 @@ exports.register = async (req, res) => {
     await newInfluencer.save();
 
     return res.status(201).json({
-      message: 'Influencer registered successfully',
-      influencerId: newInfluencer.influencerId
+      message: 'Influencer registered successfully'
     });
   } catch (error) {
     console.error(error);

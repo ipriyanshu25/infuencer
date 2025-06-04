@@ -28,8 +28,11 @@ const influencerSchema = new mongoose.Schema({
     },
     socialMedia: { type: String, required: true },
     audience: { type: String, required: true },
+    callingcode: { type: String, required: true }, // Assuming this is a string like "+1" for US
     county: { type: String, required: true },
-    bio: { type: String, default: '' }, // Changed to an empty string for better flexibility
+    countryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true }, // Reference to Country model
+    callingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true }, // Reference to Country model for calling code
+    bio: { type: String, default: '' }, 
     createdAt: { type: Date, default: Date.now }
 });
 

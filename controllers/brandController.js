@@ -12,7 +12,7 @@ const JWT_SECRET = process.env.JWT_SECRET;
  * POST /brand/register
  */
 exports.register = async (req, res) => {
-  const { name, email, password, phone, countryId } = req.body;
+  const { name, email, password, phone, countryId,callingId } = req.body;
 
   try {
     // 1. Check if a brand with this email already exists
@@ -23,11 +23,16 @@ exports.register = async (req, res) => {
 
     // 2. Look up the country document by its _id
     const countryDoc = await Country.findById(countryId);
+    const callingDoc = await Country.findById(callingId);
+    if (!callingDoc) {
+      return res.status(400).json({ message: 'Invalid calling code ID' });
+    } 
     if (!countryDoc) {
       return res.status(400).json({ message: 'Invalid country ID' });
     }
     // Extract the human‐readable name
     const countryName = countryDoc.countryName;
+    const callingCode = callingDoc.callingCode; // Assuming you want to store this too
 
     // 3. Create a new Brand, storing the countryName (not the ObjectId)
     const newBrand = new Brand({
@@ -35,7 +40,10 @@ exports.register = async (req, res) => {
       email,
       password,       // hashed by your pre-save hook
       phone,
-      county: countryName
+      county: countryName,
+      callingcode: callingCode, // Store the calling code like "+1"
+      countryId: countryId, // Store the ObjectId for reference
+      callingId: callingId // Store the calling code ObjectId
     });
 
     // 4. Save to database
@@ -43,10 +51,8 @@ exports.register = async (req, res) => {
 
     // 5. Respond with success
     return res.status(201).json({
-      message: 'Brand registered successfully',
-      brandId: newBrand.brandId,
-      email: newBrand.email
-    });
+      message: 'Brand registered successfully'
+    })
   } catch (error) {
     console.error('Error in brand.register:', error);
     return res.status(500).json({ message: 'Internal server error' });

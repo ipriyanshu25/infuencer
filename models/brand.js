@@ -27,6 +27,9 @@ const brandSchema = new mongoose.Schema({
         match: [phoneRegex, 'Please enter a valid 10-digit phone number']
     },
     county: { type: String, required: true },
+    callingcode: { type: String, required: true }, // Assuming this is a string like "+1" for US
+    countryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true }, // Reference to Country model
+    callingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true }, // Reference to Country model for calling code
     createdAt: { type: Date, default: Date.now }
 });
 

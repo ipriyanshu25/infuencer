@@ -89,6 +89,7 @@ exports.login = async (req, res) => {
     // 4. Return token
     return res.status(200).json({
       message: 'Login successful',
+      brandId: brand.brandId,
       token
     });
   } catch (error) {
@@ -117,4 +118,27 @@ exports.verifyToken = (req, res, next) => {
     req.brand = decoded;
     next();
   });
+};
+
+
+exports.getBrandById = async (req, res) => {
+  try {
+    // 1) Extract brandId from query string (?id=)
+    const brandId = req.query.id;
+    if (!brandId) {
+      return res.status(400).json({ message: 'Query parameter id is required.' });
+    }
+
+    // 2) Look up the Brand by its “brandId” field
+    const brand = await Brand.findOne({ brandId: brandId }).select('-password -_id -__v');
+    if (!brand) {
+      return res.status(404).json({ message: 'Brand not found.' });
+    }
+
+    // 3) Return the brand’s info (minus password)
+    return res.status(200).json(brand);
+  } catch (error) {
+    console.error('Error in getBrandById:', error);
+    return res.status(500).json({ message: 'Internal server error while fetching brand.' });
+  }
 };

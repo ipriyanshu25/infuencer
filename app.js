@@ -7,6 +7,7 @@ const mongoose = require('mongoose');
 const influencerRoutes    = require('./routes/influencerRoutes');
 const countryRoutes        = require('./routes/countryRoutes');
 const brandRoutes = require('./routes/brandRoutes'); // Assuming you have this route
+const campaignRoutes = require('./routes/campaignRoutes'); // Assuming you have this route
 
 
 
@@ -28,6 +29,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/influencer', influencerRoutes);
 app.use('/country', countryRoutes);
 app.use('/brand', brandRoutes);
+app.use('/campaign', campaignRoutes); // Assuming you have this route
 
 
 // ─── DB + SERVER START ───────────────────────────────────────────────────────

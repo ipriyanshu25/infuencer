@@ -96,6 +96,7 @@ exports.login = async (req, res) => {
 
         res.status(200).json({
             message: 'Login successful',
+            influencerId: influencer.influencerId,
             token
         });
     } catch (error) {

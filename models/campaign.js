@@ -69,6 +69,10 @@ const campaignSchema = new mongoose.Schema({
     enum: ['Brand Awareness', 'Sales', 'Engagement'],
     required: true
   },
+  creativeBriefText:{
+    type: String,  
+    default: ''
+  },
   budget: {
     type: Number,
     default: 0

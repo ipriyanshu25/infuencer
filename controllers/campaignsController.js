@@ -62,6 +62,7 @@ exports.createCampaign = (req, res) => {
         targetAudience,
         interestId,
         goal,
+        creativeBriefText,
         budget = 0,
         timeline,
         additionalNotes = ''
@@ -191,6 +192,7 @@ exports.createCampaign = (req, res) => {
         interestId: validInterestIds,
         interestName: interestNames.join(','),
         goal,
+        creativeBriefText,
         budget,
         timeline: timelineData,
         images: imagePaths,

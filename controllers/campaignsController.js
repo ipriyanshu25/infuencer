@@ -11,7 +11,7 @@ const Interest = require('../models/interest');
 
 // ===============================
 //  Multer setup for two fields:
-//   • "image"       → for image uploads (stored in `images` array)
+//   • "image"        → for image uploads (stored in `images` array)
 //   • "creativeBreef" → for PDF/document uploads (stored in `creativeBrief` array)
 // ===============================
 const uploadDir = path.join(__dirname, '..', 'uploads');
@@ -31,17 +31,28 @@ const storage = multer.diskStorage({
   }
 });
 
-// Using upload.fields to accept up to 10 images and 10 docs per request
+// Accept up to 10 images under 'image' and up to 10 docs under 'creativeBrief'
 const upload = multer({
   storage: storage,
   limits: { fileSize: 10 * 1024 * 1024 } // 10 MB per file
 }).fields([
-  { name: 'image', maxCount: 10 },         // for image uploads
-  { name: 'creativeBrief', maxCount: 10 }  // for PDF or doc uploads
+  { name: 'image', maxCount: 10 },
+  { name: 'creativeBrief', maxCount: 10 }
 ]);
 
+// Helper to compute isActive from timeline
+function computeIsActive(timeline) {
+  if (!timeline || !timeline.endDate) {
+    // If no endDate provided, default to active
+    return 1;
+  }
+  const now = new Date();
+  // If endDate is in the past, mark inactive (0). Otherwise active (1).
+  return (timeline.endDate < now) ? 0 : 1;
+}
+
 // =======================================
-//  CREATE CAMPAIGN (with separate image & PDF arrays)
+//  CREATE CAMPAIGN (with isActive logic)
 // =======================================
 exports.createCampaign = (req, res) => {
   upload(req, res, async function (err) {
@@ -54,7 +65,7 @@ exports.createCampaign = (req, res) => {
     }
 
     try {
-      // 1) Extract and JSON-parse fields from req.body (because this is multipart/form-data)
+      // 1) Extract and JSON-parse fields from req.body
       let {
         brandId,
         productOrServiceName,
@@ -164,25 +175,25 @@ exports.createCampaign = (req, res) => {
         }
       }
 
-      // 7) Handle uploaded image files (req.files['image']) and PDF files (req.files['creativeBreef'])
-      //    Store relative paths under `images` and `creativeBrief` arrays in the Campaign document
+      // 7) Determine isActive from timeline
+      const isActiveFlag = computeIsActive(timelineData);
+
+      // 8) Handle uploaded images and PDF files
       let imagePaths = [];
       if (Array.isArray(req.files['image'])) {
         imagePaths = req.files['image'].map(file => {
-          // e.g. "uploads/sneaker_1623456789012.jpg"
           return path.join('uploads', path.basename(file.path));
         });
       }
 
       let pdfPaths = [];
-      if (Array.isArray(req.files['creativeBreef'])) {
-        pdfPaths = req.files['creativeBreef'].map(file => {
-          // e.g. "uploads/brief_1623456789013.pdf"
+      if (Array.isArray(req.files['creativeBrief'])) {
+        pdfPaths = req.files['creativeBrief'].map(file => {
           return path.join('uploads', path.basename(file.path));
         });
       }
 
-      // 8) Construct and save the new Campaign
+      // 9) Construct and save the new Campaign
       const newCampaign = new Campaign({
         brandId: brandId,
         brandName: brandName,
@@ -197,7 +208,8 @@ exports.createCampaign = (req, res) => {
         timeline: timelineData,
         images: imagePaths,
         creativeBrief: pdfPaths,
-        additionalNotes
+        additionalNotes,
+        isActive: isActiveFlag
       });
 
       await newCampaign.save();
@@ -227,7 +239,9 @@ exports.getAllCampaigns = async (req, res) => {
     return res.json(campaigns);
   } catch (error) {
     console.error('Error in getAllCampaigns:', error);
-    return res.status(500).json({ message: 'Internal server error while fetching campaigns.' });
+    return res
+      .status(500)
+      .json({ message: 'Internal server error while fetching campaigns.' });
   }
 };
 
@@ -238,24 +252,26 @@ exports.getCampaignById = async (req, res) => {
   try {
     const campaignsId = req.query.id;
     if (!campaignsId) {
-      return res.status(400).json({ message: 'Query parameter id (campaignsId) is required.' });
+      return res
+        .status(400)
+        .json({ message: 'Query parameter id (campaignsId) is required.' });
     }
 
-    const campaign = await Campaign.findOne({ campaignsId })
-      .populate('interestId', 'name');
-
+    const campaign = await Campaign.findOne({ campaignsId }).populate('interestId', 'name');
     if (!campaign) {
       return res.status(404).json({ message: 'Campaign not found.' });
     }
     return res.json(campaign);
   } catch (error) {
     console.error('Error in getCampaignById:', error);
-    return res.status(500).json({ message: 'Internal server error while fetching campaign.' });
+    return res
+      .status(500)
+      .json({ message: 'Internal server error while fetching campaign.' });
   }
 };
 
 // =====================================
-//  UPDATE CAMPAIGN (with images + PDFs)
+//  UPDATE CAMPAIGN (with isActive logic)
 // =====================================
 exports.updateCampaign = (req, res) => {
   upload(req, res, async function (err) {
@@ -270,7 +286,9 @@ exports.updateCampaign = (req, res) => {
     try {
       const campaignsId = req.query.id;
       if (!campaignsId) {
-        return res.status(400).json({ message: 'Query parameter id (campaignsId) is required.' });
+        return res
+          .status(400)
+          .json({ message: 'Query parameter id (campaignsId) is required.' });
       }
 
       // Copy all fields from req.body
@@ -293,11 +311,7 @@ exports.updateCampaign = (req, res) => {
           }
         }
         const { age, gender, location } = parsedTA;
-        let audienceData = {
-          age: { MinAge: 0, MaxAge: 0 },
-          gender: 2,
-          location: ''
-        };
+        let audienceData = { age: { MinAge: 0, MaxAge: 0 }, gender: 2, location: '' };
         if (age && typeof age === 'object') {
           const { MinAge, MaxAge } = age;
           if (typeof MinAge === 'number') audienceData.age.MinAge = MinAge;
@@ -363,6 +377,9 @@ exports.updateCampaign = (req, res) => {
           if (!isNaN(ed)) timelineData.endDate = ed;
         }
         updates.timeline = timelineData;
+
+        // Recompute isActive based on new timeline
+        updates.isActive = computeIsActive(timelineData);
       }
 
       // If new image files were uploaded, overwrite `images`
@@ -422,5 +439,29 @@ exports.deleteCampaign = async (req, res) => {
   } catch (error) {
     console.error('Error in deleteCampaign:', error);
     return res.status(500).json({ message: 'Internal server error while deleting campaign.' });
+  }
+};
+
+exports.getActiveCampaignsByBrand = async (req, res) => {
+  try {
+    const brandId = req.query.brandId;
+    if (!brandId) {
+      return res.status(400).json({ message: 'Query parameter brandId is required.' });
+    }
+
+    // Find campaigns where brandId matches and isActive = 1
+    const campaigns = await Campaign.find({
+      brandId: brandId,
+      isActive: 1
+    })
+      .sort({ createdAt: -1 })
+      .populate('interestId', 'name');
+
+    return res.json(campaigns);
+  } catch (error) {
+    console.error('Error in getActiveCampaignsByBrand:', error);
+    return res
+      .status(500)
+      .json({ message: 'Internal server error while fetching active campaigns.' });
   }
 };

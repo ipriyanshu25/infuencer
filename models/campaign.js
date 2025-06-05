@@ -97,6 +97,11 @@ const campaignSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+    isActive: {
+    type: Number,
+    enum: [0, 1],
+    default: 1
+  },
   createdAt: {
     type: Date,
     default: Date.now

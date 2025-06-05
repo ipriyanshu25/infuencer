@@ -42,5 +42,10 @@ router.post(
   brandController.verifyToken,
   campaignController.deleteCampaign
 );
+router.get(
+  '/active',
+  brandController.verifyToken,            // ensure the brand is authenticated
+  campaignController.getActiveCampaignsByBrand
+);
 
 module.exports = router;

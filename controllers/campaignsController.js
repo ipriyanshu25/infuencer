@@ -465,3 +465,27 @@ exports.getActiveCampaignsByBrand = async (req, res) => {
       .json({ message: 'Internal server error while fetching active campaigns.' });
   }
 };
+
+exports.getPreviousCampaigns = async (req, res) => {
+  try {
+    const brandId = req.query.brandId;
+    if (!brandId) {
+      return res.status(400).json({ message: 'Query parameter brandId is required.' });
+    }
+
+    // Find campaigns where brandId matches and isActive = 1
+    const campaigns = await Campaign.find({
+      brandId: brandId,
+      isActive: 0
+    })
+      .sort({ createdAt: -1 })
+      .populate('interestId', 'name');
+
+    return res.json(campaigns);
+  } catch (error) {
+    console.error('Error in getActiveCampaignsByBrand:', error);
+    return res
+      .status(500)
+      .json({ message: 'Internal server error while fetching active campaigns.' });
+  }
+};

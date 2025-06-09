@@ -48,4 +48,11 @@ router.get(
   campaignController.getActiveCampaignsByBrand
 );
 
+router.get(
+  '/previous',
+  brandController.verifyToken,            // ensure the brand is authenticated
+  campaignController.getPreviousCampaigns
+);
+
+
 module.exports = router;

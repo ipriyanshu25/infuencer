@@ -508,7 +508,7 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
 
   // Base filter: must belong to this category and be active
   const filter = {
-    interestId: categoryId,
+    interestId: categoryId, 
     isActive: 1
   };
 

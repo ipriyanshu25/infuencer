@@ -492,21 +492,70 @@ exports.getPreviousCampaigns = async (req, res) => {
 
 
 exports.getActiveCampaignsByCategory = async (req, res) => {
-  const { categoryId } = req.body;
+  const {
+    categoryId,
+    page = 1,
+    limit = 10,
+    brandName,
+    productOrServiceName,
+    maxBudget
+  } = req.body;
+
   if (!categoryId) {
     return res.status(400).json({ message: 'categoryId is required' });
   }
+  if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+    return res.status(400).json({ message: 'Invalid categoryId' });
+  }
+
+  // Build the filter object
+  const filter = {
+    interestId: categoryId,
+    isActive: 1
+  };
+
+  if (brandName) {
+    filter.brandName = { $regex: brandName.trim(), $options: 'i' };
+  }
+
+  if (productOrServiceName) {
+    filter.productOrServiceName = { $regex: productOrServiceName.trim(), $options: 'i' };
+  }
+
+  if (typeof maxBudget === 'number') {
+    filter.budget = { $lte: maxBudget };
+  } else if (maxBudget != null) {
+    // try to coerce strings like "5000"
+    const amt = Number(maxBudget);
+    if (!isNaN(amt)) {
+      filter.budget = { $lte: amt };
+    }
+  }
+
+  const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
 
   try {
-    const campaigns = await Campaign.find({
-      // Mongoose will cast the string to ObjectId
-      interestId: { $in: [categoryId] },
-      isActive: 1
-    })
-      .sort({ createdAt: -1 })
-      .populate('interestId', 'name');
+    // Execute both count and paged query in parallel
+    const [total, campaigns] = await Promise.all([
+      Campaign.countDocuments(filter),
+      Campaign.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Math.max(1, limit))
+        .populate('interestId', 'name')
+    ]);
 
-    return res.status(200).json(campaigns);
+    const totalPages = Math.ceil(total / limit);
+
+    return res.status(200).json({
+      meta: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages
+      },
+      campaigns
+    });
   } catch (error) {
     console.error('Error fetching campaigns by category:', error);
     return res.status(500).json({ message: 'Internal server error' });

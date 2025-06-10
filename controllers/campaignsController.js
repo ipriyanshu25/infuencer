@@ -494,11 +494,9 @@ exports.getPreviousCampaigns = async (req, res) => {
 exports.getActiveCampaignsByCategory = async (req, res) => {
   const {
     categoryId,
+    search,           // single search term
     page = 1,
-    limit = 10,
-    brandName,
-    productOrServiceName,
-    maxBudget
+    limit = 10
   } = req.body;
 
   if (!categoryId) {
@@ -508,35 +506,32 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
     return res.status(400).json({ message: 'Invalid categoryId' });
   }
 
-  // Build the filter object
+  // Base filter: must belong to this category and be active
   const filter = {
     interestId: categoryId,
     isActive: 1
   };
 
-  if (brandName) {
-    filter.brandName = { $regex: brandName.trim(), $options: 'i' };
-  }
+  if (search && String(search).trim()) {
+    const term = String(search).trim();
+    const orClauses = [
+      { brandName:           { $regex: term, $options: 'i' } },
+      { productOrServiceName:{ $regex: term, $options: 'i' } }
+    ];
 
-  if (productOrServiceName) {
-    filter.productOrServiceName = { $regex: productOrServiceName.trim(), $options: 'i' };
-  }
-
-  if (typeof maxBudget === 'number') {
-    filter.budget = { $lte: maxBudget };
-  } else if (maxBudget != null) {
-    // try to coerce strings like "5000"
-    const amt = Number(maxBudget);
-    if (!isNaN(amt)) {
-      filter.budget = { $lte: amt };
+    // if the term is a number, also treat it as a maxBudget
+    const num = Number(term);
+    if (!isNaN(num)) {
+      orClauses.push({ budget: { $lte: num } });
     }
+
+    filter.$or = orClauses;
   }
 
   const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
 
   try {
-    // Execute both count and paged query in parallel
-    const [total, campaigns] = await Promise.all([
+    const [ total, campaigns ] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
         .sort({ createdAt: -1 })
@@ -545,19 +540,17 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
         .populate('interestId', 'name')
     ]);
 
-    const totalPages = Math.ceil(total / limit);
-
-    return res.status(200).json({
+    return res.json({
       meta: {
         total,
-        page: Number(page),
+        page:  Number(page),
         limit: Number(limit),
-        totalPages
+        totalPages: Math.ceil(total / limit)
       },
       campaigns
     });
-  } catch (error) {
-    console.error('Error fetching campaigns by category:', error);
+  } catch (err) {
+    console.error('Error fetching campaigns by category:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };

@@ -24,7 +24,7 @@ router.get(
 
 // 3. Get one campaign by its campaignsId (UUID)
 router.get(
-  '/',
+  '/id',
   brandController.verifyToken,
   campaignController.getCampaignById
 );

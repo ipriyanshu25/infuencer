@@ -1,9 +1,11 @@
 // controllers/influencerController.js
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const Influencer = require('../models/influencer');
 const Country = require('../models/country');
 const Interest = require('../models/interest');
+const Campaign = require('../models/campaign'); 
 const AudienceRange = require('../models/audience');
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -135,29 +137,6 @@ exports.verifyToken = (req, res, next) => {
     next();
   });
 };
-
-// Get the influencer's own profile
-exports.getProfile = async (req, res) => {
-  try {
-    // influencerId was set by verifyToken middleware
-    const { influencerId } = req.influencer;
-
-    const influencer = await Influencer.findOne(
-      { influencerId },
-      '-password -_id -__v'
-    );
-
-    if (!influencer) {
-      return res.status(404).json({ message: 'Influencer not found' });
-    }
-
-    res.status(200).json(influencer);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-};
-
 
 exports.getList = async (req, res) => {
   try {

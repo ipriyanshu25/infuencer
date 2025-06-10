@@ -489,3 +489,26 @@ exports.getPreviousCampaigns = async (req, res) => {
       .json({ message: 'Internal server error while fetching active campaigns.' });
   }
 };
+
+
+exports.getActiveCampaignsByCategory = async (req, res) => {
+  const { categoryId } = req.body;
+  if (!categoryId) {
+    return res.status(400).json({ message: 'categoryId is required' });
+  }
+
+  try {
+    const campaigns = await Campaign.find({
+      // Mongoose will cast the string to ObjectId
+      interestId: { $in: [categoryId] },
+      isActive: 1
+    })
+      .sort({ createdAt: -1 })
+      .populate('interestId', 'name');
+
+    return res.status(200).json(campaigns);
+  } catch (error) {
+    console.error('Error fetching campaigns by category:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};

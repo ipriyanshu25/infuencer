@@ -515,8 +515,8 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
   if (search && String(search).trim()) {
     const term = String(search).trim();
     const orClauses = [
-      { brandName:           { $regex: term, $options: 'i' } },
-      { productOrServiceName:{ $regex: term, $options: 'i' } }
+      { brandName:            { $regex: term, $options: 'i' } },
+      { productOrServiceName: { $regex: term, $options: 'i' } }
     ];
 
     // if the term is a number, also treat it as a maxBudget
@@ -524,8 +524,6 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
     if (!isNaN(num)) {
       orClauses.push({ budget: { $lte: num } });
     }
-
-    filter.$or = orClauses;
   }
 
   const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
@@ -543,8 +541,8 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
     return res.json({
       meta: {
         total,
-        page:  Number(page),
-        limit: Number(limit),
+        page:       Number(page),
+        limit:      Number(limit),
         totalPages: Math.ceil(total / limit)
       },
       campaigns

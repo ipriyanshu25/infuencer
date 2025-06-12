@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 
 const campaignController = require('../controllers/campaignsController');
-const brandController    = require('../controllers/brandController');
+const brandController = require('../controllers/brandController');
 
 // All endpoints are protected by verifyToken middleware:
 
@@ -58,6 +58,9 @@ router.post(
   brandController.verifyToken,            // ensure the brand is authenticated
   campaignController.getActiveCampaignsByCategory
 );
+
+router.post('/checkApplied', brandController.verifyToken, campaignController.checkApplied);
+router.post('/byInfluencer', brandController.verifyToken, campaignController.getCampaignsByInfluencer);
 
 
 module.exports = router;

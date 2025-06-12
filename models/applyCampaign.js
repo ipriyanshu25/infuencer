@@ -5,7 +5,7 @@ const applicantSchema = new mongoose.Schema({
   name:         { type: String, required: true }
 }, { _id: false });
 
-const applyCampaingsSchema = new mongoose.Schema({
+const applyCampaignsSchema = new mongoose.Schema({
   campaignId: {
     type: String,
     required: true,
@@ -21,4 +21,4 @@ const applyCampaingsSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-module.exports = mongoose.model('ApplyCampaing', applyCampaingsSchema);
+module.exports = mongoose.model('ApplyCampaign', applyCampaignsSchema);

@@ -1,6 +1,6 @@
 // controllers/applyCampaingsController.js
 
-const ApplyCampaing = require('../models/applyCampaing');
+const ApplyCampaing = require('../models/applyCampaign');
 const Campaign      = require('../models/campaign');
 const Influencer    = require('../models/influencer');
 
@@ -86,3 +86,5 @@ exports.getListByCampaign = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+

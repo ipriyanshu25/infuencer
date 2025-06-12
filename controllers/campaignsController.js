@@ -8,6 +8,8 @@ const multer   = require('multer');
 const Campaign = require('../models/campaign');
 const Brand    = require('../models/brand');
 const Interest = require('../models/interest');
+const ApplyCampaign  = require('../models/applyCampaign');
+const Influencer = require('../models/influencer');
 
 // ===============================
 //  Multer setup for two fields:
@@ -550,6 +552,117 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching campaigns by category:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+exports.checkApplied = async (req, res) => {
+  const { campaignId, influencerId } = req.body;
+  if (!campaignId || !influencerId) {
+    return res.status(400).json({ message: 'campaignId and influencerId are required' });
+  }
+
+  try {
+    // fetch campaign
+    const campaign = await Campaign
+      .findOne({ campaignsId: campaignId })
+      .populate('interestId', 'name')
+      .lean();
+    if (!campaign) {
+      return res.status(404).json({ message: 'Campaign not found.' });
+    }
+
+    // check apply‐record
+    const applied = await ApplyCampaign.exists({
+      campaignId,
+      'applicants.influencerId': influencerId
+    });
+
+    // attach flag
+    campaign.isApplied = applied ? 1 : 0;
+    return res.json(campaign);
+
+  } catch (err) {
+    console.error('Error in checkApplied:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+exports.getCampaignsByInfluencer = async (req, res) => {
+  const {
+    influencerId,
+    search,
+    page = 1,
+    limit = 10
+  } = req.body;
+
+  if (!influencerId) {
+    return res.status(400).json({ message: 'influencerId is required' });
+  }
+
+  try {
+    // 1) find influencer → get categoryId
+    const inf = await Influencer.findOne({ influencerId }, 'categoryId');
+    if (!inf) {
+      return res.status(404).json({ message: 'Influencer not found' });
+    }
+    const categoryId = inf.categoryId;
+    if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+      return res.status(400).json({ message: 'Invalid categoryId on influencer' });
+    }
+
+    // 2) build campaign filter
+    const filter = { interestId: categoryId, isActive: 1 };
+    if (search?.trim()) {
+      const term = search.trim();
+      const or = [
+        { brandName:            { $regex: term, $options: 'i' } },
+        { productOrServiceName: { $regex: term, $options: 'i' } }
+      ];
+      const num = Number(term);
+      if (!isNaN(num)) or.push({ budget: { $lte: num } });
+      filter.$or = or;
+    }
+
+    const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
+
+    // 3) fetch total + page
+    const [ total, campaigns ] = await Promise.all([
+      Campaign.countDocuments(filter),
+      Campaign.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Math.max(1, limit))
+        .populate('interestId', 'name')
+        .lean()
+    ]);
+
+    // 4) find which of these the influencer applied to
+    const campaignIds = campaigns.map(c => c.campaignsId);
+    const appliedRecs = await ApplyCampaign.find({
+      campaignId: { $in: campaignIds },
+      'applicants.influencerId': influencerId
+    }, 'campaignId').lean();
+    const appliedSet = new Set(appliedRecs.map(r => r.campaignId));
+
+    // 5) annotate
+    const annotated = campaigns.map(c => ({
+      ...c,
+      isApproved: appliedSet.has(c.campaignsId) ? 1 : 0
+    }));
+
+    return res.json({
+      meta: {
+        total,
+        page:       Number(page),
+        limit:      Number(limit),
+        totalPages: Math.ceil(total / limit)
+      },
+      campaigns: annotated
+    });
+
+  } catch (err) {
+    console.error('Error in getCampaignsByInfluencer:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };

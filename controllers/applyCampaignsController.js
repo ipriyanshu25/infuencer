@@ -20,22 +20,25 @@ exports.applyToCampaign = async (req, res) => {
     // 2) Find or create the application record
     let record = await ApplyCampaing.findOne({ campaignId });
     if (!record) {
+      // first application for this campaign
       record = new ApplyCampaing({
         campaignId,
         applicants: [{ influencerId, name: inf.name }]
       });
     } else {
-      // Only add if influencer hasn't applied yet
+      // Check if influencer already applied
       const already = record.applicants.some(a => a.influencerId === influencerId);
-      if (!already) {
-        record.applicants.push({ influencerId, name: inf.name });
+      if (already) {
+        return res.status(400).json({ message: 'Influencer has already applied to this campaign' });
       }
+      // add new applicant
+      record.applicants.push({ influencerId, name: inf.name });
     }
 
-    // Save the updated record
+    // 3) Save the updated record
     await record.save();
 
-    // 3) Compute new count and sync to Campaign
+    // 4) Compute new count and sync to Campaign
     const applicantCount = record.applicants.length;
     await Campaign.findOneAndUpdate(
       { campaignsId: campaignId },

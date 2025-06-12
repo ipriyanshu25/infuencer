@@ -83,7 +83,7 @@ exports.login = async (req, res) => {
     const token = jwt.sign(
       { brandId: brand.brandId, email: brand.email },
       JWT_SECRET,
-      { expiresIn: '1d' }
+      { expiresIn: '100d' }
     );
 
     // 4. Return token

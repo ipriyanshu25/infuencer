@@ -104,7 +104,7 @@ exports.login = async (req, res) => {
     const token = jwt.sign(
       { influencerId: influencer.influencerId, email: influencer.email },
       JWT_SECRET,
-      { expiresIn: '1d' }
+      { expiresIn: '100d' }
     );
 
     res.status(200).json({

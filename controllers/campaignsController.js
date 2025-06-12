@@ -444,18 +444,18 @@ exports.deleteCampaign = async (req, res) => {
 
 exports.getActiveCampaignsByBrand = async (req, res) => {
   try {
-    const brandId = req.query.brandId;
+    const { brandId } = req.query;
     if (!brandId) {
       return res.status(400).json({ message: 'Query parameter brandId is required.' });
     }
 
-    // Find campaigns where brandId matches and isActive = 1
     const campaigns = await Campaign.find({
-      brandId: brandId,
+      brandId,
       isActive: 1
     })
       .sort({ createdAt: -1 })
-      .populate('interestId', 'name');
+      .populate('interestId', 'name')
+      .lean();    // ← returns plain JS objects, including `applicantCount`
 
     return res.json(campaigns);
   } catch (error) {
@@ -511,6 +511,7 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
     interestId: categoryId, 
     isActive: 1
   };
+ 
 
   if (search && String(search).trim()) {
     const term = String(search).trim();

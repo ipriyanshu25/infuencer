@@ -69,8 +69,8 @@ const campaignSchema = new mongoose.Schema({
     enum: ['Brand Awareness', 'Sales', 'Engagement'],
     required: true
   },
-  creativeBriefText:{
-    type: String,  
+  creativeBriefText: {
+    type: String,
     default: ''
   },
   budget: {
@@ -79,7 +79,7 @@ const campaignSchema = new mongoose.Schema({
   },
   timeline: {
     startDate: { type: Date },
-    endDate:   { type: Date }
+    endDate: { type: Date }
   },
   // NEW: store multiple image file paths here
   images: [
@@ -97,10 +97,14 @@ const campaignSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-    isActive: {
+  isActive: {
     type: Number,
     enum: [0, 1],
     default: 1
+  },
+  applicantCount: {
+    type: Number,
+    default: 0
   },
   createdAt: {
     type: Date,

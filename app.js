@@ -10,6 +10,7 @@ const brandRoutes = require('./routes/brandRoutes'); // Assuming you have this r
 const campaignRoutes = require('./routes/campaignRoutes'); // Assuming you have this route
 const interestRoutes = require('./routes/interestRoutes'); // Assuming you have this route
 const audienceRoutes = require('./routes/audienceRoutes'); // Assuming you have this route
+const applyCampaingRoutes = require('./routes/applyCampaingRoutes'); // Assuming you have this route
 
 
 const app  = express();
@@ -33,6 +34,7 @@ app.use('/brand', brandRoutes);
 app.use('/campaign', campaignRoutes); // Assuming you have this route
 app.use('/interest', interestRoutes); // Assuming you have this route
 app.use('/audience', audienceRoutes); // Assuming you have this route
+app.use('/apply', applyCampaingRoutes); // Assuming you have this route
 
 
 // ─── DB + SERVER START ───────────────────────────────────────────────────────

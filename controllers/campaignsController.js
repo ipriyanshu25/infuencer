@@ -589,19 +589,13 @@ exports.checkApplied = async (req, res) => {
 };
 
 exports.getCampaignsByInfluencer = async (req, res) => {
-  const {
-    influencerId,
-    search,
-    page = 1,
-    limit = 10
-  } = req.body;
-
+  const { influencerId, search, page = 1, limit = 10 } = req.body;
   if (!influencerId) {
     return res.status(400).json({ message: 'influencerId is required' });
   }
 
   try {
-    // 1) find influencer → get categoryId
+    // 1) Load influencer to get categoryId
     const inf = await Influencer.findOne({ influencerId }, 'categoryId');
     if (!inf) {
       return res.status(404).json({ message: 'Influencer not found' });
@@ -611,7 +605,7 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Invalid categoryId on influencer' });
     }
 
-    // 2) build campaign filter
+    // 2) Build campaign filter
     const filter = { interestId: categoryId, isActive: 1 };
     if (search?.trim()) {
       const term = search.trim();
@@ -626,7 +620,7 @@ exports.getCampaignsByInfluencer = async (req, res) => {
 
     const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
 
-    // 3) fetch total + page
+    // 3) Fetch total + page of campaigns
     const [ total, campaigns ] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
@@ -637,30 +631,38 @@ exports.getCampaignsByInfluencer = async (req, res) => {
         .lean()
     ]);
 
-    // 4) find which of these the influencer applied to
+    // 4) Determine which of these the influencer applied to
     const campaignIds = campaigns.map(c => c.campaignsId);
-    const appliedRecs = await ApplyCampaign.find({
-      campaignId: { $in: campaignIds },
-      'applicants.influencerId': influencerId
-    }, 'campaignId').lean();
-    const appliedSet = new Set(appliedRecs.map(r => r.campaignId));
+    const appliedRecs = await ApplyCampaign.find({ campaignId: { $in: campaignIds } }).lean();
 
-    // 5) annotate
-    const annotated = campaigns.map(c => ({
-      ...c,
-      isApproved: appliedSet.has(c.campaignsId) ? 1 : 0
-    }));
-
-    return res.json({
-      meta: {
-        total,
-        page:       Number(page),
-        limit:      Number(limit),
-        totalPages: Math.ceil(total / limit)
-      },
-      campaigns: annotated
+    // Build maps for applied and approved for this influencer
+    const appliedSet = new Set();
+    const approvedMap = new Map();
+    appliedRecs.forEach(r => {
+      if (Array.isArray(r.applicants) && r.applicants.some(a => a.influencerId === influencerId)) {
+        appliedSet.add(r.campaignId);
+      }
+      if (Array.isArray(r.approved) && r.approved.length > 0) {
+        approvedMap.set(r.campaignId, r.approved[0].influencerId);
+      }
     });
 
+    // 5) Annotate each campaign
+    const annotated = campaigns.map(c => {
+      const cid = c.campaignsId;
+      let status = 0; // not applied
+      if (approvedMap.get(cid) === influencerId) {
+        status = 2; // approved
+      } else if (appliedSet.has(cid)) {
+        status = 1; // pending
+      }
+      return { ...c, isApproved: status };
+    });
+
+    return res.json({
+      meta: { total, page: Number(page), limit: Number(limit), totalPages: Math.ceil(total / limit) },
+      campaigns: annotated
+    });
   } catch (err) {
     console.error('Error in getCampaignsByInfluencer:', err);
     return res.status(500).json({ message: 'Internal server error' });

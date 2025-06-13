@@ -18,7 +18,11 @@ const applyCampaignsSchema = new mongoose.Schema({
    createdAt: {
     type: Date,
     default: Date.now
-  }
+  },
+  approved: {
+    type: [applicantSchema],
+    default: []
+  },
 }, { timestamps: true });
 
 module.exports = mongoose.model('ApplyCampaign', applyCampaignsSchema);

@@ -2,7 +2,8 @@ const express = require('express');
 const router  = express.Router();
 const {
   applyToCampaign,
-  getListByCampaign
+  getListByCampaign,
+  approveInfluencer
 } = require('../controllers/applyCampaignsController');
 const { verifyToken } = require('../controllers/brandController');
 
@@ -11,5 +12,6 @@ router.post('/campaign', verifyToken, applyToCampaign);
 
 // list all influencers for a campaign (requires valid token)
 router.post('/list',  verifyToken, getListByCampaign);
+router.post('/approve', verifyToken, approveInfluencer);
 
 module.exports = router;

@@ -122,6 +122,41 @@ exports.getListByCampaign = async (req, res) => {
   }
 };
 
+exports.approveInfluencer = async (req, res) => {
+  const { campaignId, influencerId } = req.body;
+  if (!campaignId || !influencerId) {
+    return res.status(400).json({ message: 'Both campaignId and influencerId are required' });
+  }
 
+  try {
+    // 1) Fetch application record
+    const record = await ApplyCampaing.findOne({ campaignId });
+    if (!record) {
+      return res.status(404).json({ message: 'No applications found for this campaign' });
+    }
 
+    // 2) Check influencer applied
+    const applicant = record.applicants.find(a => a.influencerId === influencerId);
+    if (!applicant) {
+      return res.status(400).json({ message: 'Influencer did not apply for this campaign' });
+    }
 
+    // 3) Ensure only one approval
+    if (record.approved && record.approved.length > 0) {
+      return res.status(400).json({ message: 'An influencer is already approved for this campaign' });
+    }
+
+    // 4) Approve influencer
+    record.approved = [{ influencerId: applicant.influencerId, name: applicant.name }];
+    await record.save();
+
+    return res.status(200).json({
+      message: 'Influencer approved successfully',
+      campaignId,
+      approved: record.approved[0]
+    });
+  } catch (err) {
+    console.error('Error in approveInfluencer:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};

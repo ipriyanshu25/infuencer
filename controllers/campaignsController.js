@@ -668,3 +668,78 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+exports.getApprovedCampaignsByInfluencer = async (req, res) => {
+  const {
+    influencerId,
+    search,
+    page = 1,
+    limit = 10,
+  } = req.body;
+
+  if (!influencerId) {
+    return res.status(400).json({ message: 'influencerId is required' });
+  }
+
+  try {
+    // 1) Find all apply records where this influencer is approved
+    const approvedRecs = await ApplyCampaign.find({
+      'approved.influencerId': influencerId
+    }).lean();
+
+    const approvedIds = approvedRecs.map(r => r.campaignId);
+    if (approvedIds.length === 0) {
+      return res.status(200).json({
+        meta: { total: 0, page, limit, totalPages: 0 },
+        campaigns: []
+      });
+    }
+
+    // 2) Build campaign filter limited to approvedIds
+    const filter = {
+      campaignsId: { $in: approvedIds },
+      isActive: 1
+    };
+
+    // 3) Apply search if provided
+    if (search?.trim()) {
+      const term = search.trim();
+      const or = [
+        { brandName:            { $regex: term, $options: 'i' } },
+        { productOrServiceName: { $regex: term, $options: 'i' } }
+      ];
+      const num = Number(term);
+      if (!isNaN(num)) or.push({ budget: { $lte: num } });
+      filter.$or = or;
+    }
+
+    // 4) Pagination setup
+    const pageNum = Math.max(1, page);
+    const lim = Math.max(1, limit);
+    const skip = (pageNum - 1) * lim;
+
+    // 5) Count total matching
+    const total = await Campaign.countDocuments(filter);
+
+    // 6) Build query
+    let query = Campaign.find(filter)
+      .sort({ createdAt: -1 });
+    // 8) Pagination
+    query = query.skip(skip).limit(lim)
+      .populate('interestId', 'name')
+      .lean();
+
+    // 9) Execute
+    const campaigns = await query.exec();
+
+    const totalPages = Math.ceil(total / lim);
+    return res.json({
+      meta: { total, page: pageNum, limit: lim, totalPages },
+      campaigns
+    });
+  } catch (err) {
+    console.error('Error in getApprovedCampaignsByInfluencer:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};

@@ -73,54 +73,59 @@ exports.getListByCampaign = async (req, res) => {
   }
 
   try {
-    // 1) Fetch application record
     const record = await ApplyCampaing.findOne({ campaignId });
     if (!record) {
-      return res.status(200).json({ meta: { total: 0, page, limit, totalPages: 0 }, influencers: [], applicantCount: 0 });
+      return res.status(200).json({
+        meta: { total: 0, page, limit, totalPages: 0 },
+        applicantCount: 0,
+        isAssignedCampaign: 0,
+        influencers: []
+      });
     }
 
-    // 2) Build base filter of influencerIds
     const influencerIds = record.applicants.map(a => a.influencerId);
     const filter = { influencerId: { $in: influencerIds } };
 
-    // 3) Apply search on influencer name if provided
-    if (search && String(search).trim()) {
-      filter.name = { $regex: String(search).trim(), $options: 'i' };
+    if (search && search.trim()) {
+      filter.name = { $regex: search.trim(), $options: 'i' };
     }
 
-    // 4) Count total matching
     const total = await Influencer.countDocuments(filter);
-
-    // 5) Build query
     let query = Influencer.find(filter).select('-password -__v');
 
-    // 6) Apply sorting if provided
     if (sortField) {
       const order = sortOrder === 1 ? -1 : 1;
       query = query.sort({ [sortField]: order });
     }
 
-    // 7) Pagination
     const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
     query = query.skip(skip).limit(Math.max(1, limit));
 
-    // 8) Execute
     const influencers = await query.exec();
-
-    // 9) Calculate totalPages and applicantCount
     const totalPages = Math.ceil(total / limit);
     const applicantCount = record.applicants.length;
 
+    const approvedId = record.approved && record.approved.length > 0
+      ? record.approved[0].influencerId
+      : null;
+    const annotated = influencers.map(i => ({
+      ...i.toObject(),
+      isAssigned: i.influencerId === approvedId ? 1 : 0
+    }));
+    const isAssignedCampaign = approvedId ? 1 : 0;
+
     return res.status(200).json({
       meta: { total, page: Number(page), limit: Number(limit), totalPages },
-      influencers,
-      applicantCount
+      applicantCount,
+      isAssignedCampaign,
+      influencers: annotated
     });
   } catch (err) {
     console.error('Error in getListByCampaign:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
 
 exports.approveInfluencer = async (req, res) => {
   const { campaignId, influencerId } = req.body;

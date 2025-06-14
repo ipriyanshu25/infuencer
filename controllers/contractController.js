@@ -201,3 +201,34 @@ exports.viewContractPdf = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+
+
+exports.acceptContract = async (req, res) => {
+    try {
+        const { contractId } = req.body;
+
+        if (!contractId) {
+            return res.status(400).json({ message: 'contractId is required in the request body' });
+        }
+
+        const contract = await Contract.findOne({ contractId });
+
+        if (!contract) {
+            return res.status(404).json({ message: 'Contract not found' });
+        }
+
+        // Update the isAccepted field
+        contract.isAccepted = 1;
+        await contract.save();
+
+        res.status(200).json({
+            message: 'Contract approved successfully',
+            contract
+        });
+
+    } catch (error) {
+        console.error('Error approving contract:', error);
+        res.status(500).json({ error: error.message });
+    }
+};

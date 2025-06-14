@@ -64,6 +64,10 @@ const contractSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now
+    },
+    isAccepted:{
+        type:Number,
+        default:0
     }
 });
 

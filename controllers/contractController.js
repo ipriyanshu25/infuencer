@@ -135,3 +135,69 @@ exports.getContract = async (req, res) => {
 };
 
 
+
+
+exports.viewContractPdf = async (req, res) => {
+    try {
+        const { contractId } = req.body;
+
+        if (!contractId) {
+            return res.status(400).json({ message: 'contractId is required in the request body' });
+        }
+
+        // Fetch contract
+        const contract = await Contract.findOne({ contractId });
+        if (!contract) {
+            return res.status(404).json({ message: 'Contract not found' });
+        }
+
+        // Fetch related data
+        const [campaign, brand, influencer] = await Promise.all([
+            Campaign.findOne({ campaignsId: contract.campaignId }),
+            Brand.findOne({ brandId: contract.brandId }),
+            Influencer.findOne({ influencerId: contract.influencerId }),
+        ]);
+
+        if (!campaign || !campaign.timeline) {
+            return res.status(404).json({ message: 'Campaign or timeline not found' });
+        }
+
+        if (!brand || !influencer) {
+            return res.status(404).json({ message: 'Brand or Influencer not found' });
+        }
+
+        // Prepare PDF
+        const doc = new PDFDocument();
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename=Contract-${contractId}.pdf`);
+        doc.pipe(res);
+
+        doc.fontSize(20).text('INFLUENCER COLLABORATION AGREEMENT', { align: 'center' });
+        doc.moveDown();
+
+        doc.fontSize(12).text(`This Agreement is made on ${contract.effectiveDate} between:\n`);
+        doc.text(`1. Parties\n- Brand: ${brand.name}\n- Influencer: ${influencer.name}`);
+        doc.moveDown();
+
+        doc.text(`2. Scope of Work\nInfluencer will create and publish ${contract.deliverableDescription} on specified platform(s) according to Brand’s guidelines.`);
+        doc.moveDown();
+
+        doc.text(`3. Compensation\nBrand agrees to pay Influencer ${contract.feeAmount}. Payment to be made via ${contract.term.paymentMethod} within ${contract.term.paymentTerms} days of content publication.`);
+        doc.moveDown();
+
+        doc.text(`4. Term\nThis Agreement begins on ${new Date(contract.timeline.startDate).toDateString()} and ends on ${new Date(contract.timeline.endDate).toDateString()}, unless earlier terminated in writing.`);
+        doc.moveDown();
+
+        doc.text('5. Signatures\n');
+        doc.moveDown();
+        doc.text('_____________________________\nBrand Representative');
+        doc.moveDown();
+        doc.text('_____________________________\nInfluencer');
+
+        doc.end();
+
+    } catch (error) {
+        console.error('Error generating contract PDF:', error);
+        res.status(500).json({ error: error.message });
+    }
+};

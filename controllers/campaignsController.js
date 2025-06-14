@@ -10,6 +10,8 @@ const Brand    = require('../models/brand');
 const Interest = require('../models/interest');
 const ApplyCampaign  = require('../models/applyCampaign');
 const Influencer = require('../models/influencer');
+const Contract = require('../models/contract');
+
 
 // ===============================
 //  Multer setup for two fields:
@@ -683,7 +685,7 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
   }
 
   try {
-    // 1) Find all apply records where this influencer is approved
+    // 1) Find all campaigns where this influencer is approved
     const approvedRecs = await ApplyCampaign.find({
       'approved.influencerId': influencerId
     }).lean();
@@ -696,17 +698,17 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
       });
     }
 
-    // 2) Build campaign filter limited to approvedIds
+    // 2) Build campaign filter
     const filter = {
       campaignsId: { $in: approvedIds },
       isActive: 1
     };
 
-    // 3) Apply search if provided
+    // 3) Apply search
     if (search?.trim()) {
       const term = search.trim();
       const or = [
-        { brandName:            { $regex: term, $options: 'i' } },
+        { brandName: { $regex: term, $options: 'i' } },
         { productOrServiceName: { $regex: term, $options: 'i' } }
       ];
       const num = Number(term);
@@ -722,21 +724,39 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
     // 5) Count total matching
     const total = await Campaign.countDocuments(filter);
 
-    // 6) Build query
+    // 6) Fetch campaigns
     let query = Campaign.find(filter)
-      .sort({ createdAt: -1 });
-    // 8) Pagination
-    query = query.skip(skip).limit(lim)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(lim)
       .populate('interestId', 'name')
       .lean();
 
-    // 9) Execute
     const campaigns = await query.exec();
+
+    // 7) Fetch all contracts by this influencer on these campaigns
+    const contracts = await Contract.find({
+      influencerId,
+      campaignId: { $in: campaigns.map(c => c.campaignsId) }
+    }).select('campaignId contractId').lean();
+
+    // Map for quick lookup
+    const contractMap = {};
+    contracts.forEach(c => {
+      contractMap[c.campaignId] = c.contractId;
+    });
+
+    // 8) Annotate campaigns
+    const updatedCampaigns = campaigns.map(c => ({
+      ...c,
+      isContracted: contractMap[c.campaignsId] ? 1 : 0,
+      contractId: contractMap[c.campaignsId] || null
+    }));
 
     const totalPages = Math.ceil(total / lim);
     return res.json({
       meta: { total, page: pageNum, limit: lim, totalPages },
-      campaigns
+      campaigns: updatedCampaigns
     });
   } catch (err) {
     console.error('Error in getApprovedCampaignsByInfluencer:', err);

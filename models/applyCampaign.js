@@ -23,6 +23,7 @@ const applyCampaignsSchema = new mongoose.Schema({
     type: [applicantSchema],
     default: []
   },
+  
 }, { timestamps: true });
 
 module.exports = mongoose.model('ApplyCampaign', applyCampaignsSchema);

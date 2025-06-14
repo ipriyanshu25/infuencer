@@ -3,6 +3,7 @@
 const ApplyCampaing = require('../models/applyCampaign');
 const Campaign      = require('../models/campaign');
 const Influencer    = require('../models/influencer');
+const Contract = require('../models/contract'); 
 
 exports.applyToCampaign = async (req, res) => {
   const { campaignId, influencerId } = req.body;
@@ -100,7 +101,6 @@ exports.getListByCampaign = async (req, res) => {
 
     const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
     query = query.skip(skip).limit(Math.max(1, limit));
-
     const influencers = await query.exec();
     const totalPages = Math.ceil(total / limit);
     const applicantCount = record.applicants.length;
@@ -108,10 +108,23 @@ exports.getListByCampaign = async (req, res) => {
     const approvedId = record.approved && record.approved.length > 0
       ? record.approved[0].influencerId
       : null;
-    const annotated = influencers.map(i => ({
-      ...i.toObject(),
-      isAssigned: i.influencerId === approvedId ? 1 : 0
-    }));
+
+    // Find if any contract exists for the campaign
+    const contract = await Contract.findOne({ campaignId });
+
+    const annotated = influencers.map(influencer => {
+      const isAssigned = influencer.influencerId === approvedId ? 1 : 0;
+      const isContracted = contract && contract.influencerId === influencer.influencerId ? 1 : 0;
+      const contractId = isContracted ? contract.contractId : null;
+
+      return {
+        ...influencer.toObject(),
+        isAssigned,
+        isContracted,
+        contractId
+      };
+    });
+
     const isAssignedCampaign = approvedId ? 1 : 0;
 
     return res.status(200).json({
@@ -125,6 +138,7 @@ exports.getListByCampaign = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
 
 
 exports.approveInfluencer = async (req, res) => {

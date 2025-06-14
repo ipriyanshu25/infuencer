@@ -57,6 +57,10 @@ const contractSchema = new mongoose.Schema({
         startDate: { type: Date },
         endDate: { type: Date }
     },
+    type: {
+        type: Number, // 0 = PDF only, 1 = Save
+        required: true
+    },
     createdAt: {
         type: Date,
         default: Date.now

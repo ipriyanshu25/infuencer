@@ -74,13 +74,13 @@ exports.getListByCampaign = async (req, res) => {
   }
 
   try {
-    // 1) Load the ApplyCampaing record
+    // 1) Load the application record
     const record = await ApplyCampaing.findOne({ campaignId });
     if (!record) {
       return res.status(200).json({
         meta:               { total: 0, page, limit, totalPages: 0 },
         applicantCount:     0,
-        isAssignedCampaign: 0,
+        isAccepted: 0,
         isContracted:       0,
         contractId:         null,
         influencers:        []
@@ -91,47 +91,56 @@ exports.getListByCampaign = async (req, res) => {
     const influencerIds = record.applicants.map(a => a.influencerId);
     const filter = { influencerId: { $in: influencerIds } };
 
+    // 3) Optional name search
     if (search?.trim()) {
       filter.name = { $regex: search.trim(), $options: 'i' };
     }
 
-    // 3) Count & page through Influencer collection
+    // 4) Pagination + total count
     const total = await Influencer.countDocuments(filter);
     let query = Influencer.find(filter).select('-password -__v');
-
     if (sortField) {
       const dir = sortOrder === 1 ? -1 : 1;
       query = query.sort({ [sortField]: dir });
     }
-
     const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
     query = query.skip(skip).limit(Math.max(1, limit));
     const influencers = await query.exec();
 
-    // 4) Determine which influencer (if any) was approved/assigned
+    // 5) Determine approved influencer
     const approvedId = record.approved?.[0]?.influencerId || null;
-    const isAssignedCampaign = approvedId ? 1 : 0;
 
-    // 5) Lookup contract for this campaign
+    // 6) Lookup the single Contract for this campaign (if any)
     const contract = await Contract.findOne({ campaignId }).lean();
-    const isContracted = contract ? 1 : 0;
-    const contractId   = contract ? contract.contractId : null;
+    const isContracted       = contract ? 1 : 0;
+    const contractId         = contract ? contract.contractId : null;
+    const isAccepted = contract && contract.isAccepted === 1 ? 1 : 0;
 
-    // 6) Annotate each influencer with isAssigned flag
-    const annotated = influencers.map(inf => ({
-      ...inf.toObject(),
-      isAssigned: inf.influencerId === approvedId ? 1 : 0
-    }));
+    // 7) Annotate each influencer
+    const annotated = influencers.map(inf => {
+      const isAssigned = inf.influencerId === approvedId ? 1 : 0;
+      const isAccepted = isAssigned && contract?.isAccepted === 1 ? 1 : 0;
+      return {
+        ...inf.toObject(),
+        isAssigned,
+        isAccepted
+      };
+    });
 
-    // 7) Build pagination meta
+    // 8) Build pagination meta
     const totalPages     = Math.ceil(total / limit);
     const applicantCount = record.applicants.length;
 
-    // 8) Return everything
+    // 9) Return response
     return res.status(200).json({
-      meta:               { total, page: Number(page), limit: Number(limit), totalPages },
+      meta: {
+        total,
+        page:               Number(page),
+        limit:              Number(limit),
+        totalPages
+      },
       applicantCount,
-      isAssignedCampaign,
+      isAccepted,
       isContracted,
       contractId,
       influencers:        annotated

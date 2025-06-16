@@ -705,22 +705,16 @@ exports.getCampaignsByInfluencer = async (req, res) => {
 };
 
 exports.getApprovedCampaignsByInfluencer = async (req, res) => {
-  const {
-    influencerId,
-    search,
-    page = 1,
-    limit = 10,
-  } = req.body;
-
+  const { influencerId, search, page = 1, limit = 10 } = req.body;
   if (!influencerId) {
     return res.status(400).json({ message: 'influencerId is required' });
   }
 
   try {
-    // 1) Find all campaigns where this influencer is approved
+    // 1) Find all ApplyCampaign records where this influencer was approved
     const approvedRecs = await ApplyCampaign.find({
       'approved.influencerId': influencerId
-    }).lean();
+    }).select('campaignId').lean();
 
     const approvedIds = approvedRecs.map(r => r.campaignId);
     if (approvedIds.length === 0) {
@@ -730,17 +724,17 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
       });
     }
 
-    // 2) Build campaign filter
+    // 2) Build campaign filter for only those approved and still active
     const filter = {
       campaignsId: { $in: approvedIds },
-      isActive: 1
+      isActive:    1
     };
 
-    // 3) Apply search
+    // 3) Optional search on brandName, productOrServiceName or budget
     if (search?.trim()) {
       const term = search.trim();
       const or = [
-        { brandName: { $regex: term, $options: 'i' } },
+        { brandName:            { $regex: term, $options: 'i' } },
         { productOrServiceName: { $regex: term, $options: 'i' } }
       ];
       const num = Number(term);
@@ -748,47 +742,58 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
       filter.$or = or;
     }
 
-    // 4) Pagination setup
+    // 4) Pagination & total count
     const pageNum = Math.max(1, page);
-    const lim = Math.max(1, limit);
-    const skip = (pageNum - 1) * lim;
+    const lim     = Math.max(1, limit);
+    const skip    = (pageNum - 1) * lim;
+    const total   = await Campaign.countDocuments(filter);
 
-    // 5) Count total matching
-    const total = await Campaign.countDocuments(filter);
-
-    // 6) Fetch campaigns
-    let query = Campaign.find(filter)
+    // 5) Fetch campaigns
+    const campaigns = await Campaign.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(lim)
       .populate('interestId', 'name')
       .lean();
 
-    const campaigns = await query.exec();
-
-    // 7) Fetch all contracts by this influencer on these campaigns
-    const contracts = await Contract.find({
+    // 6) Fetch contracts for these campaigns by this influencer
+    //    projecting contractId and isAccepted
+    const contractRecs = await Contract.find({
       influencerId,
       campaignId: { $in: campaigns.map(c => c.campaignsId) }
-    }).select('campaignId contractId').lean();
+    }, 'campaignId contractId isAccepted').lean();
 
-    // Map for quick lookup
-    const contractMap = {};
-    contracts.forEach(c => {
-      contractMap[c.campaignId] = c.contractId;
+    const contractMap  = new Map();
+    const acceptedMap  = new Map();
+    contractRecs.forEach(c => {
+      contractMap.set(c.campaignId, c.contractId);
+      acceptedMap.set(c.campaignId, c.isAccepted === 1 ? 1 : 0);
     });
 
-    // 8) Annotate campaigns
-    const updatedCampaigns = campaigns.map(c => ({
-      ...c,
-      isContracted: contractMap[c.campaignsId] ? 1 : 0,
-      contractId: contractMap[c.campaignsId] || null
-    }));
+    // 7) Annotate each campaign
+    const annotated = campaigns.map(c => {
+      const cid         = c.campaignsId;
+      const isContracted = contractMap.has(cid) ? 1 : 0;
+      const contractId   = contractMap.get(cid) || null;
+      const isAccepted   = acceptedMap.get(cid) || 0;
 
-    const totalPages = Math.ceil(total / lim);
+      return {
+        ...c,
+        isContracted,
+        contractId,
+        isAccepted
+      };
+    });
+
+    // 8) Respond
     return res.json({
-      meta: { total, page: pageNum, limit: lim, totalPages },
-      campaigns: updatedCampaigns
+      meta: {
+        total,
+        page:       pageNum,
+        limit:      lim,
+        totalPages: Math.ceil(total / lim)
+      },
+      campaigns: annotated
     });
   } catch (err) {
     console.error('Error in getApprovedCampaignsByInfluencer:', err);

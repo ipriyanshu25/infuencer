@@ -4,47 +4,83 @@ require('dotenv').config();
 const express  = require('express');
 const cors     = require('cors');
 const mongoose = require('mongoose');
+const http     = require('http');
+const { Server } = require('socket.io');
+
+// your existing routes
 const influencerRoutes    = require('./routes/influencerRoutes');
-const countryRoutes        = require('./routes/countryRoutes');
-const brandRoutes = require('./routes/brandRoutes'); // Assuming you have this route
-const campaignRoutes = require('./routes/campaignRoutes'); // Assuming you have this route
-const interestRoutes = require('./routes/interestRoutes'); // Assuming you have this route
-const audienceRoutes = require('./routes/audienceRoutes'); // Assuming you have this route
-const applyCampaingRoutes = require('./routes/applyCampaingRoutes'); // Assuming you have this route
-const contractRoutes = require('./routes/contractRoutes');
+const countryRoutes       = require('./routes/countryRoutes');
+const brandRoutes         = require('./routes/brandRoutes');
+const campaignRoutes      = require('./routes/campaignRoutes');
+const interestRoutes      = require('./routes/interestRoutes');
+const audienceRoutes      = require('./routes/audienceRoutes');
+const applyCampaingRoutes = require('./routes/applyCampaingRoutes');
+const contractRoutes      = require('./routes/contractRoutes');
+// new chat routes
+const chatRoutes          = require('./routes/chatRoutes');
 
+const app    = express();
+const server = http.createServer(app);
 
-const app  = express();
-const PORT = process.env.PORT || 5000;
+// attach Socket.io
+const io = new Server(server, {
+  cors: {
+    origin:      process.env.FRONTEND_ORIGIN || 'http://localhost:3000',
+    methods:     ['GET','POST'],
+    credentials: true
+  }
+});
 
+// make io available in your controllers
+app.set('io', io);
+
+// handle socket connections
+io.on('connection', socket => {
+  console.log('⚡️ Socket connected:', socket.id);
+
+  socket.on('joinChat', ({ roomId }) => {
+    socket.join(`chat_${roomId}`);
+  });
+
+  socket.on('sendChatMessage', async ({ roomId, senderId, text }) => {
+    const ChatRoom = require('./models/chat');
+    const room = await ChatRoom.findOne({ roomId });
+    if (!room) return;
+    const msg = { senderId, text, timestamp: new Date() };
+    room.messages.push(msg);
+    await room.save();
+    io.to(`chat_${roomId}`).emit('chatMessage', { roomId, message: msg });
+  });
+});
+
+// CORS + body parsers
 app.use(cors({
   origin:      process.env.FRONTEND_ORIGIN || 'http://localhost:3000',
-  credentials: true,
+  credentials: true
 }));
-
-// Body parsers
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-
-
-// ─── ROUTES ──────────────────────────────────────────────────────────────────
+// REST routes
 app.use('/influencer', influencerRoutes);
-app.use('/country', countryRoutes);
-app.use('/brand', brandRoutes);
-app.use('/campaign', campaignRoutes); // Assuming you have this route
-app.use('/interest', interestRoutes); // Assuming you have this route
-app.use('/audience', audienceRoutes); // Assuming you have this route
-app.use('/apply', applyCampaingRoutes); // Assuming you have this route
-app.use('/contract', contractRoutes); // Assuming you have this route
+app.use('/country',    countryRoutes);
+app.use('/brand',      brandRoutes);
+app.use('/campaign',   campaignRoutes);
+app.use('/interest',   interestRoutes);
+app.use('/audience',   audienceRoutes);
+app.use('/apply',      applyCampaingRoutes);
+app.use('/contract',   contractRoutes);
 
+// chat history & fallback messaging
+app.use('/chat', chatRoutes);
 
-// ─── DB + SERVER START ───────────────────────────────────────────────────────
+// connect to Mongo & start server
+const PORT = process.env.PORT || 5000;
 mongoose
-  .connect(process.env.MONGODB_URI)  // no need for useNewUrlParser/useUnifiedTopology
+  .connect(process.env.MONGODB_URI)
   .then(() => {
     console.log('✅ Connected to MongoDB');
-    app.listen(PORT, () => {
+    server.listen(PORT, () => {
       console.log(`🚀 Server listening on port ${PORT}`);
     });
   })

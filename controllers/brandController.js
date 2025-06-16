@@ -67,26 +67,28 @@ exports.login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // 1. Find brand by email
-    const brand = await Brand.findOne({ email });
+    // 1) Find brand by email, case-insensitive
+    const brand = await Brand.findOne({
+      email: { $regex: `^${email.trim()}$`, $options: 'i' }
+    });
     if (!brand) {
       return res.status(404).json({ message: 'Brand not found' });
     }
 
-    // 2. Compare provided password with hashed password
+    // 2) Compare provided password with hashed password
     const isMatch = await brand.comparePassword(password);
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    // 3. Generate a signed JWT (expires in 1 hour)
+    // 3) Generate a signed JWT (expires in 100 days)
     const token = jwt.sign(
       { brandId: brand.brandId, email: brand.email },
       JWT_SECRET,
       { expiresIn: '100d' }
     );
 
-    // 4. Return token
+    // 4) Return token
     return res.status(200).json({
       message: 'Login successful',
       brandId: brand.brandId,

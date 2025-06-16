@@ -74,71 +74,80 @@ exports.getListByCampaign = async (req, res) => {
   }
 
   try {
+    // 1) Fetch application record
     const record = await ApplyCampaing.findOne({ campaignId });
     if (!record) {
       return res.status(200).json({
-        meta: { total: 0, page, limit, totalPages: 0 },
-        applicantCount: 0,
+        meta:              { total: 0, page, limit, totalPages: 0 },
+        applicantCount:    0,
         isAssignedCampaign: 0,
-        influencers: []
+        isContracted:      0,
+        contractId:        null,
+        influencers:       []
       });
     }
 
+    // 2) Build base filter of influencerIds
     const influencerIds = record.applicants.map(a => a.influencerId);
     const filter = { influencerId: { $in: influencerIds } };
 
+    // 3) Optional search
     if (search && search.trim()) {
       filter.name = { $regex: search.trim(), $options: 'i' };
     }
 
+    // 4) Total matching
     const total = await Influencer.countDocuments(filter);
+
+    // 5) Query build
     let query = Influencer.find(filter).select('-password -__v');
 
+    // 6) Sorting
     if (sortField) {
       const order = sortOrder === 1 ? -1 : 1;
       query = query.sort({ [sortField]: order });
     }
 
+    // 7) Pagination
     const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
     query = query.skip(skip).limit(Math.max(1, limit));
+
+    // 8) Execute
     const influencers = await query.exec();
-    const totalPages = Math.ceil(total / limit);
+
+    // 9) Pagination meta
+    const totalPages     = Math.ceil(total / limit);
     const applicantCount = record.applicants.length;
 
-    const approvedId = record.approved && record.approved.length > 0
-      ? record.approved[0].influencerId
-      : null;
-
-    // Find if any contract exists for the campaign
-    const contract = await Contract.findOne({ campaignId });
-
-    const annotated = influencers.map(influencer => {
-      const isAssigned = influencer.influencerId === approvedId ? 1 : 0;
-      const isContracted = contract && contract.influencerId === influencer.influencerId ? 1 : 0;
-      const contractId = isContracted ? contract.contractId : null;
-
-      return {
-        ...influencer.toObject(),
-        isAssigned,
-        isContracted,
-        contractId
-      };
-    });
-
+    // 10) Approved/Assigned
+    const approvedId = record.approved?.[0]?.influencerId || null;
     const isAssignedCampaign = approvedId ? 1 : 0;
 
+    // 11) Contract lookup
+    const contract = await Contract.findOne({ campaignId }).lean();
+    const isContracted = contract && contract.influencerId === approvedId ? 1 : 0;
+    const contractId   = isContracted ? contract.contractId : null;
+
+    // 12) Annotate each influencer with isAssigned
+    const annotated = influencers.map(inf => ({
+      ...inf.toObject(),
+      isAssigned: inf.influencerId === approvedId ? 1 : 0
+    }));
+
+    // Final response
     return res.status(200).json({
-      meta: { total, page: Number(page), limit: Number(limit), totalPages },
+      meta:               { total, page: Number(page), limit: Number(limit), totalPages },
       applicantCount,
       isAssignedCampaign,
-      influencers: annotated
+      isContracted,
+      contractId,
+      influencers:        annotated
     });
   } catch (err) {
     console.error('Error in getListByCampaign:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
-
 
 
 exports.approveInfluencer = async (req, res) => {

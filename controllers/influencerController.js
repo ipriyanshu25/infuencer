@@ -91,31 +91,39 @@ exports.login = async (req, res) => {
   if (!email || !password) {
     return res.status(400).json({ message: 'Both fields are required' });
   }
+
   try {
-    const influencer = await Influencer.findOne({ email });
+    // 1) Find influencer by email, case‐insensitive
+    const influencer = await Influencer.findOne({
+      email: { $regex: `^${email.trim()}$`, $options: 'i' }
+    });
     if (!influencer) {
       return res.status(404).json({ message: 'Influencer not found' });
     }
+
+    // 2) Check password
     const isMatch = await influencer.comparePassword(password);
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
+    // 3) Issue JWT
     const token = jwt.sign(
       { influencerId: influencer.influencerId, email: influencer.email },
       JWT_SECRET,
       { expiresIn: '100d' }
     );
 
-    res.status(200).json({
-      message: 'Login successful',
+    // 4) Return profile + token
+    return res.status(200).json({
+      message:    'Login successful',
       influencerId: influencer.influencerId,
-      categoryId: influencer.categoryId,
+      categoryId:   influencer.categoryId,
       token
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Internal server error' });
+    console.error('Error in influencer.login:', error);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 };
 

@@ -1,14 +1,14 @@
 // controllers/campaignController.js
 
-const path     = require('path');
-const fs       = require('fs');
+const path = require('path');
+const fs = require('fs');
 const mongoose = require('mongoose');
-const multer   = require('multer');
+const multer = require('multer');
 
 const Campaign = require('../models/campaign');
-const Brand    = require('../models/brand');
+const Brand = require('../models/brand');
 const Interest = require('../models/interest');
-const ApplyCampaign  = require('../models/applyCampaign');
+const ApplyCampaign = require('../models/applyCampaign');
 const Influencer = require('../models/influencer');
 const Contract = require('../models/contract');
 
@@ -512,15 +512,15 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
 
   // Base filter: must belong to this category and be active
   const filter = {
-    interestId: categoryId, 
+    interestId: categoryId,
     isActive: 1
   };
- 
+
 
   if (search && String(search).trim()) {
     const term = String(search).trim();
     const orClauses = [
-      { brandName:            { $regex: term, $options: 'i' } },
+      { brandName: { $regex: term, $options: 'i' } },
       { productOrServiceName: { $regex: term, $options: 'i' } }
     ];
 
@@ -534,7 +534,7 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
   const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
 
   try {
-    const [ total, campaigns ] = await Promise.all([
+    const [total, campaigns] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
         .sort({ createdAt: -1 })
@@ -546,8 +546,8 @@ exports.getActiveCampaignsByCategory = async (req, res) => {
     return res.json({
       meta: {
         total,
-        page:       Number(page),
-        limit:      Number(limit),
+        page: Number(page),
+        limit: Number(limit),
         totalPages: Math.ceil(total / limit)
       },
       campaigns
@@ -652,14 +652,17 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     });
 
     // 5) Find all Contracts for these campaigns by this influencer
+    //    and also pull `isAccepted`
     const contractRecs = await Contract.find({
       campaignId:   { $in: campaignIds },
       influencerId  // only this influencer
-    }, 'campaignId contractId').lean();
+    }, 'campaignId contractId isAccepted').lean();
 
-    const contractMap = new Map();
+    const contractMap  = new Map();
+    const acceptedMap  = new Map();
     contractRecs.forEach(c => {
       contractMap.set(c.campaignId, c.contractId);
+      acceptedMap.set(c.campaignId, c.isAccepted === 1 ? 1 : 0);
     });
 
     // 6) Annotate campaigns
@@ -671,13 +674,17 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       } else if (appliedSet.has(cid)) {
         status = 1;             // pending
       }
+
       const isContracted = contractMap.has(cid) ? 1 : 0;
       const contractId   = contractMap.get(cid) || null;
+      const isAccepted   = acceptedMap.get(cid) || 0;
+
       return {
         ...c,
-        isApproved:     status,
+        isApproved:   status,
         isContracted,
-        contractId
+        contractId,
+        isAccepted    // ← newly added
       };
     });
 

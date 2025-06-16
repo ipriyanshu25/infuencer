@@ -61,14 +61,18 @@ const contractSchema = new mongoose.Schema({
         type: Number, // 0 = PDF only, 1 = Save
         required: true
     },
+    isAccepted:{
+        type:Number,
+        default:0
+    },
+    isAssigned: {
+        type: Number,
+        default: 0 
+    },
     createdAt: {
         type: Date,
         default: Date.now
     },
-    isAccepted:{
-        type:Number,
-        default:0
-    }
 });
 
 module.exports = mongoose.model('Contract', contractSchema);

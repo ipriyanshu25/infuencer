@@ -5,110 +5,124 @@ const Influencer = require('../models/influencer');
 const Campaign = require('../models/campaign');
 
 exports.sendOrGenerateContract = async (req, res) => {
-    try {
-        const {
-            brandId,
-            influencerId,
-            campaignId,
-            effectiveDate,
-            deliverableDescription,
-            feeAmount,
-            term,
-            type
-        } = req.body;
+  try {
+    const {
+      brandId,
+      influencerId,
+      campaignId,
+      effectiveDate,
+      deliverableDescription,
+      feeAmount,
+      term,
+      type
+    } = req.body;
 
-        if (![0, 1].includes(type)) {
-            return res.status(400).json({ message: 'Invalid type. Must be 0 (PDF only) or 1 (save)' });
-        }
-
-        if (!brandId || !influencerId || !campaignId) {
-            return res.status(400).json({ message: 'brandId, influencerId, and campaignId are required' });
-        }
-
-        const campaign = await Campaign.findOne({ campaignsId: campaignId });
-        if (!campaign || !campaign.timeline) {
-            return res.status(404).json({ message: 'Timeline not found for campaign' });
-        }
-
-        const brand = await Brand.findOne({ brandId });
-        if (!brand) {
-            return res.status(404).json({ message: 'Brand not found' });
-        }
-
-        const influencer = await Influencer.findOne({ influencerId });
-        if (!influencer) {
-            return res.status(404).json({ message: 'Influencer not found' });
-        }
-
-        // Create contract object
-        const contractData = {
-            brandId,
-            influencerId,
-            campaignId,
-            brandName: brand.name,
-            influencerName: influencer.name,
-            effectiveDate,
-            deliverableDescription,
-            feeAmount,
-            term,
-            timeline: {
-                startDate: campaign.timeline.startDate,
-                endDate: campaign.timeline.endDate
-            },
-            type
-        };
-
-        // Type 0: Generate PDF only
-        if (type === 0) {
-            const doc = new PDFDocument();
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename=Contract.pdf`);
-            doc.pipe(res);
-
-            doc.fontSize(20).text('Influencer Marketing Contract', { align: 'center' });
-            doc.moveDown(2);
-            doc.fontSize(14).text('Contract Details', { underline: true });
-            doc.fontSize(12).text(`Effective Date: ${effectiveDate}`);
-            doc.text(`Start Date: ${new Date(campaign.timeline.startDate).toDateString()}`);
-            doc.text(`End Date: ${new Date(campaign.timeline.endDate).toDateString()}`);
-            doc.moveDown();
-
-            doc.fontSize(14).text('Parties Involved', { underline: true });
-            doc.fontSize(12).text(`Brand Name: ${brand.name}`);
-            doc.text(`Influencer Name: ${influencer.name}`);
-            doc.moveDown();
-
-            doc.fontSize(14).text('Deliverables', { underline: true });
-            doc.fontSize(12).text(deliverableDescription);
-            doc.moveDown();
-
-            doc.fontSize(14).text('Compensation Details', { underline: true });
-            doc.fontSize(12).text(`Fee Amount: ${feeAmount}`);
-            doc.text(`Payment Method: ${term.paymentMethod}`);
-            doc.text(`Payment Terms: ${term.paymentTerms} days`);
-            doc.moveDown();
-
-            doc.fontSize(14).text('Signatures', { underline: true });
-            doc.text('\n\n_________________________\nBrand Representative');
-            doc.text('\n\n_________________________\nInfluencer');
-
-            doc.end(); // Finish PDF
-            return;
-        }
-
-        // Type 1: Save contract to DB
-        const newContract = new Contract(contractData);
-        await newContract.save();
-
-        res.status(201).json({
-            message: 'Contract created and saved successfully',
-            contract: newContract
-        });
-
-    } catch (error) {
-        console.error('Error processing contract:', error);
-        res.status(500).json({ error: error.message });
+    // 1) Validate basic inputs
+    if (![0, 1].includes(type)) {
+      return res.status(400).json({ message: 'Invalid type. Must be 0 (PDF) or 1 (save)' });
     }
+    if (!brandId || !influencerId || !campaignId) {
+      return res.status(400).json({ message: 'brandId, influencerId and campaignId are required' });
+    }
+
+    // 2) Load related records
+    const [campaign, brand, influencer] = await Promise.all([
+      Campaign.findOne({ campaignsId: campaignId }),
+      Brand.findOne({ brandId }),
+      Influencer.findOne({ influencerId })
+    ]);
+    if (!campaign)     return res.status(404).json({ message: 'Campaign not found' });
+    if (!brand)        return res.status(404).json({ message: 'Brand not found' });
+    if (!influencer)   return res.status(404).json({ message: 'Influencer not found' });
+
+    // 3) Prepare contract data
+    const contractData = {
+      brandId,
+      influencerId,
+      campaignId,
+      brandName:            brand.name,
+      influencerName:       influencer.name,
+      effectiveDate,                     // e.g. "2025-06-20"
+      deliverableDescription,
+      feeAmount,
+      term,                              // { paymentMethod: "...", paymentTerms: 30 }
+      timeline: {
+        startDate: campaign.timeline.startDate,
+        endDate:   campaign.timeline.endDate
+      },
+      type,
+      isAssigned: 1                      // mark that a contract has been sent
+    };
+
+    // 4) If type=0 → generate & stream PDF, don’t save to DB
+    if (type === 0) {
+      const doc = new PDFDocument();
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename=Contract.pdf');
+      doc.pipe(res);
+
+      doc.fontSize(20).text('Influencer Marketing Contract', { align: 'center' });
+      doc.moveDown();
+
+      doc.fontSize(14).text('Contract Details', { underline: true });
+      doc.fontSize(12).text(`Effective Date: ${effectiveDate}`);
+      doc.text(`Start Date: ${new Date(campaign.timeline.startDate).toDateString()}`);
+      doc.text(`End Date: ${new Date(campaign.timeline.endDate).toDateString()}`);
+      doc.moveDown();
+
+      doc.fontSize(14).text('Parties Involved', { underline: true });
+      doc.fontSize(12).text(`Brand: ${brand.name}`);
+      doc.text(`Influencer: ${influencer.name}`);
+      doc.moveDown();
+
+      doc.fontSize(14).text('Deliverables', { underline: true });
+      doc.fontSize(12).text(deliverableDescription);
+      doc.moveDown();
+
+      doc.fontSize(14).text('Compensation', { underline: true });
+      doc.fontSize(12).text(`Fee: ${feeAmount}`);
+      doc.text(`Payment Method: ${term.paymentMethod}`);
+      doc.text(`Payment Terms: ${term.paymentTerms} days`);
+      doc.moveDown();
+
+      doc.fontSize(14).text('Signatures', { underline: true });
+      doc.moveDown(2);
+      doc.text('_________________________\nBrand Representative');
+      doc.moveDown(2);
+      doc.text('_________________________\nInfluencer');
+
+      doc.end();
+      return;
+    }
+
+    // 5) type=1 → save contract to DB
+    const newContract = new Contract(contractData);
+    await newContract.save();
+
+    // 6) Update ApplyCampaing record so that this influencer is marked approved
+    let appRec = await ApplyCampaing.findOne({ campaignId });
+    if (!appRec) {
+      // if no record yet, create one
+      appRec = new ApplyCampaing({
+        campaignId,
+        applicants: [],
+        approved:   [{ influencerId, name: influencer.name }]
+      });
+    } else {
+      // overwrite approved array (only one allowed)
+      appRec.approved = [{ influencerId, name: influencer.name }];
+    }
+    await appRec.save();
+
+    // 7) Return saved contract
+    return res.status(201).json({
+      message:  'Contract created and saved successfully',
+      contract: newContract
+    });
+  } catch (error) {
+    console.error('Error in sendOrGenerateContract:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
 };
 
 

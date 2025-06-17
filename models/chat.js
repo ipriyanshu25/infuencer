@@ -3,10 +3,12 @@ const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 
 const messageSchema = new mongoose.Schema({
-  senderId:  { type: String, required: true },   // brandId or influencerId
-  text:      { type: String, required: true },
-  timestamp: { type: Date,   default: Date.now }
-}, { _id: false });
+  messageId:  { type: String, required: true, unique: true, default: uuidv4 },
+  senderId:   { type: String, required: true },    // brandId or influencerId
+  text:       { type: String, required: true },
+  timestamp:  { type: Date,   default: Date.now },
+  replyTo:    { type: String, default: null }      // messageId of the message this one replies to
+});
 
 const participantSchema = new mongoose.Schema({
   userId: { type: String, required: true },

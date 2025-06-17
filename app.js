@@ -36,20 +36,27 @@ app.set('io', io);
 
 // handle socket connections
 io.on('connection', socket => {
-  console.log('⚡️ Socket connected:', socket.id);
-
   socket.on('joinChat', ({ roomId }) => {
     socket.join(`chat_${roomId}`);
   });
 
-  socket.on('sendChatMessage', async ({ roomId, senderId, text }) => {
+  socket.on('sendChatMessage', async ({ roomId, senderId, text, replyTo }) => {
     const ChatRoom = require('./models/chat');
     const room = await ChatRoom.findOne({ roomId });
     if (!room) return;
-    const msg = { senderId, text, timestamp: new Date() };
+
+    const msg = {
+      messageId: uuidv4(),
+      senderId,
+      text,
+      timestamp: new Date(),
+      replyTo: replyTo || null
+    };
     room.messages.push(msg);
     await room.save();
-    io.to(`chat_${roomId}`).emit('chatMessage', { roomId, message: msg });
+
+    io.to(`chat_${roomId}`)
+      .emit('chatMessage', { roomId, message: msg });
   });
 });
 

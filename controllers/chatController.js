@@ -23,15 +23,26 @@ exports.createRoom = async (req, res) => {
   const participants = [
     { userId: brandId,      name: brand.name },
     { userId: influencerId, name: infl.name }
-  ].sort((a,b) => a.userId.localeCompare(b.userId));
+  ].sort((a, b) => a.userId.localeCompare(b.userId));
 
   // find or create
-  let room = await ChatRoom.findOne({ 'participants.userId': participants[0].userId, 'participants.userId': participants[1].userId });
+  let room = await ChatRoom.findOne({
+    'participants.userId': participants[0].userId,
+    'participants.userId': participants[1].userId
+  });
+  let msg;
   if (!room) {
     room = new ChatRoom({ participants });
     await room.save();
+    msg = 'Chat room created';
+  } else {
+    msg = 'Chat room already exists';
   }
-  return res.json({ roomId: room.roomId });
+
+  return res.json({
+    message: msg,
+    roomId:  room.roomId
+  });
 };
 
 // 2) List all rooms for a given user (with last message & names)
@@ -48,11 +59,15 @@ exports.getRooms = async (req, res) => {
       : null;
     return {
       roomId:       room.roomId,
-      participants: room.participants,   // array of { userId, name }
+      participants: room.participants,
       lastMessage:  lastMsg
     };
   });
-  return res.json({ rooms: summary });
+
+  return res.json({
+    message: 'Rooms retrieved',
+    rooms:   summary
+  });
 };
 
 // 3) Fetch last N messages for a room
@@ -66,7 +81,10 @@ exports.getMessages = async (req, res) => {
     return res.status(404).json({ message: 'Chat room not found' });
   }
   const msgs = room.messages.slice(-limit);
-  return res.json({ messages: msgs });
+  return res.json({
+    message:  'Messages fetched',
+    messages: msgs
+  });
 };
 
 // 4) Append a new message (REST fallback) and broadcast
@@ -86,5 +104,8 @@ exports.postMessage = async (req, res) => {
   const io = req.app.get('io');
   io.to(`chat_${roomId}`).emit('chatMessage', { roomId, message: msg });
 
-  return res.status(201).json({ message: msg });
+  return res.status(201).json({
+    message: 'Message sent',
+    messageData: msg
+  });
 };

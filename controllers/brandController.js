@@ -1,8 +1,9 @@
 // controllers/brandController.js
 
-const jwt   = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 const Brand = require('../models/brand');
 const Country = require('../models/country');
+const Milestone = require('../models/milestone');
 
 // Retrieve JWT_SECRET from environment variables
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -12,7 +13,7 @@ const JWT_SECRET = process.env.JWT_SECRET;
  * POST /brand/register
  */
 exports.register = async (req, res) => {
-  const { name, email, password, phone, countryId,callingId } = req.body;
+  const { name, email, password, phone, countryId, callingId } = req.body;
 
   try {
     // 1. Check if a brand with this email already exists
@@ -26,7 +27,7 @@ exports.register = async (req, res) => {
     const callingDoc = await Country.findById(callingId);
     if (!callingDoc) {
       return res.status(400).json({ message: 'Invalid calling code ID' });
-    } 
+    }
     if (!countryDoc) {
       return res.status(400).json({ message: 'Invalid country ID' });
     }
@@ -128,20 +129,33 @@ exports.getBrandById = async (req, res) => {
     // 1) Extract brandId from query string (?id=)
     const brandId = req.query.id;
     if (!brandId) {
-      return res.status(400).json({ message: 'Query parameter id is required.' });
+      return res
+        .status(400)
+        .json({ message: 'Query parameter id is required.' });
     }
 
     // 2) Look up the Brand by its “brandId” field
-    const brand = await Brand.findOne({ brandId: brandId }).select('-password -_id -__v');
-    if (!brand) {
+    //    exclude password, internal _id and __v
+    const brandDoc = await Brand.findOne({ brandId })
+      .select('-password -_id -__v')
+      .lean();   // get a plain JS object
+    if (!brandDoc) {
       return res.status(404).json({ message: 'Brand not found.' });
     }
 
-    // 3) Return the brand’s info (minus password)
-    return res.status(200).json(brand);
+    const milestoneDoc = await Milestone.findOne({ brandId }).lean();
+    const walletBalance = milestoneDoc ? milestoneDoc.walletBalance : 0;
+
+    // 4) Return brand info + walletBalance
+    return res.status(200).json({
+      ...brandDoc,
+      walletBalance
+    });
   } catch (error) {
     console.error('Error in getBrandById:', error);
-    return res.status(500).json({ message: 'Internal server error while fetching brand.' });
+    return res
+      .status(500)
+      .json({ message: 'Internal server error while fetching brand.' });
   }
 };
 

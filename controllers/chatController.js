@@ -10,7 +10,7 @@ exports.createRoom = async (req, res) => {
     return res.status(400).json({ message: 'brandId and influencerId are required' });
   }
 
-  // fetch their names
+  // fetch their names in parallel
   const [ brand, infl ] = await Promise.all([
     Brand.findOne({ brandId }, 'name'),
     Influencer.findOne({ influencerId }, 'name')
@@ -19,29 +19,29 @@ exports.createRoom = async (req, res) => {
     return res.status(404).json({ message: 'Brand or Influencer not found' });
   }
 
-  // sort by ID to get deterministic participant order
+  // sort by ID so order doesn’t matter
   const participants = [
     { userId: brandId,      name: brand.name },
     { userId: influencerId, name: infl.name }
   ].sort((a, b) => a.userId.localeCompare(b.userId));
 
-  // find or create
+  // 🔑 find a room that already has *both* userIds
   let room = await ChatRoom.findOne({
-    'participants.userId': participants[0].userId,
-    'participants.userId': participants[1].userId
+    'participants.userId': { $all: [ brandId, influencerId ] }
   });
-  let msg;
+
+  let message;
   if (!room) {
     room = new ChatRoom({ participants });
     await room.save();
-    msg = 'Chat room created';
+    message = 'Chat room created';
   } else {
-    msg = 'Chat room already exists';
+    message = 'Chat room already exists';
   }
 
   return res.json({
-    message: msg,
-    roomId:  room.roomId
+    message,
+    roomId: room.roomId
   });
 };
 

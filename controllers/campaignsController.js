@@ -11,6 +11,7 @@ const Interest = require('../models/interest');
 const ApplyCampaign = require('../models/applyCampaign');
 const Influencer = require('../models/influencer');
 const Contract = require('../models/contract');
+const SubscriptionPlan = require('../models/subscription');
 
 
 // ===============================
@@ -59,17 +60,18 @@ function computeIsActive(timeline) {
 //  CREATE CAMPAIGN (with isActive logic)
 // =======================================
 exports.createCampaign = (req, res) => {
-  upload(req, res, async function (err) {
+  upload(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
       console.error('Multer Error:', err);
       return res.status(400).json({ message: err.message });
-    } else if (err) {
-      console.error('Unknown Upload Error:', err);
+    }
+    if (err) {
+      console.error('Upload Error:', err);
       return res.status(500).json({ message: 'Error uploading files.' });
     }
 
     try {
-      // 1) Extract and JSON-parse fields from req.body
+      // 1) Pull & validate incoming fields
       let {
         brandId,
         productOrServiceName,
@@ -83,146 +85,125 @@ exports.createCampaign = (req, res) => {
         additionalNotes = ''
       } = req.body;
 
-      // 2) Validate required fields
-      if (!brandId) {
-        return res.status(400).json({ message: 'brandId is required.' });
-      }
+      if (!brandId) return res.status(400).json({ message: 'brandId is required.' });
       if (!productOrServiceName || !goal) {
-        return res
-          .status(400)
-          .json({ message: 'productOrServiceName and goal are required.' });
+        return res.status(400).json({ message: 'productOrServiceName and goal are required.' });
       }
 
-      // 3) Fetch brandName by brandId
-      const brandDoc = await Brand.findOne({ brandId });
-      if (!brandDoc) {
-        return res.status(404).json({ message: 'Brand not found.' });
-      }
-      const brandName = brandDoc.name;
+      // 2) Load Brand & its current plan
+      const brand = await Brand.findOne({ brandId });
+      if (!brand) return res.status(404).json({ message: 'Brand not found.' });
 
-      // 4) JSON-parse targetAudience
-      let audienceData = {
-        age: { MinAge: 0, MaxAge: 0 },
-        gender: 2,
-        location: ''
-      };
+      const plan = await SubscriptionPlan.findOne({ planId: brand.subscription.planId }).lean();
+      if (!plan) {
+        return res.status(500).json({ message: 'Subscription plan not found.' });
+      }
+
+      // 3) Enforce “live_campaigns_limit”
+      const liveCapFeature = plan.features.find(f => f.key === 'live_campaigns_limit');
+      const limit = liveCapFeature ? liveCapFeature.value : 0; // 0 means “unlimited”
+      if (limit > 0) {
+        const activeCount = await Campaign.countDocuments({ brandId, isActive: 1 });
+        if (activeCount >= limit) {
+          return res.status(403).json({
+            message: `Active‐campaigns limit reached (${limit}). Upgrade your plan to create more.`
+          });
+        }
+      }
+
+      // 4) Parse & normalize targetAudience JSON
+      let audienceData = { age: { MinAge: 0, MaxAge: 0 }, gender: 2, location: '' };
       if (targetAudience) {
-        let parsedTA = targetAudience;
-        if (typeof targetAudience === 'string') {
-          try {
-            parsedTA = JSON.parse(targetAudience);
-          } catch {
-            return res.status(400).json({ message: 'Invalid JSON in targetAudience.' });
-          }
+        let ta = targetAudience;
+        if (typeof ta === 'string') {
+          try { ta = JSON.parse(ta); }
+          catch { return res.status(400).json({ message: 'Invalid JSON in targetAudience.' }); }
         }
-        const { age, gender, location } = parsedTA;
-        if (age && typeof age === 'object') {
-          const { MinAge, MaxAge } = age;
-          if (typeof MinAge === 'number') audienceData.age.MinAge = MinAge;
-          if (typeof MaxAge === 'number') audienceData.age.MaxAge = MaxAge;
-        }
-        if (typeof gender === 'number' && [0, 1, 2].includes(gender)) {
-          audienceData.gender = gender;
-        }
-        if (typeof location === 'string') {
-          audienceData.location = location.trim();
-        }
+        const { age, gender, location } = ta;
+        if (age?.MinAge != null) audienceData.age.MinAge = Number(age.MinAge) || 0;
+        if (age?.MaxAge != null) audienceData.age.MaxAge = Number(age.MaxAge) || 0;
+        if ([0, 1, 2].includes(gender)) audienceData.gender = gender;
+        if (typeof location === 'string') audienceData.location = location.trim();
       }
 
-      // 5) JSON-parse and validate interestId array
-      let validInterestIds = [];
-      let interestNames = [];
+      // 5) Parse & validate interestId array
+      let validIds = [], names = [];
       if (interestId) {
-        let parsedInterests = interestId;
-        if (typeof interestId === 'string') {
-          try {
-            parsedInterests = JSON.parse(interestId);
-          } catch {
-            return res.status(400).json({ message: 'Invalid JSON in interestId.' });
-          }
+        let arr = interestId;
+        if (typeof arr === 'string') {
+          try { arr = JSON.parse(arr); }
+          catch { return res.status(400).json({ message: 'Invalid JSON in interestId.' }); }
         }
-        if (!Array.isArray(parsedInterests)) {
+        if (!Array.isArray(arr)) {
           return res.status(400).json({ message: 'interestId must be an array.' });
         }
-        for (const id of parsedInterests) {
+        for (let id of arr) {
           if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ message: `Invalid interestId: ${id}` });
           }
-          const interestDoc = await Interest.findById(id);
-          if (!interestDoc) {
-            return res.status(404).json({ message: `Interest not found: ${id}` });
-          }
-          validInterestIds.push(interestDoc._id);
-          interestNames.push(interestDoc.name);
+          const doc = await Interest.findById(id);
+          if (!doc) return res.status(404).json({ message: `Interest not found: ${id}` });
+          validIds.push(doc._id);
+          names.push(doc.name);
         }
       }
 
-      // 6) JSON-parse timeline
-      let timelineData = {};
+      // 6) Parse timeline JSON
+      let tlData = {};
       if (timeline) {
-        let parsedTL = timeline;
-        if (typeof timeline === 'string') {
-          try {
-            parsedTL = JSON.parse(timeline);
-          } catch {
-            return res.status(400).json({ message: 'Invalid JSON in timeline.' });
-          }
+        let tl = timeline;
+        if (typeof tl === 'string') {
+          try { tl = JSON.parse(tl); }
+          catch { return res.status(400).json({ message: 'Invalid JSON in timeline.' }); }
         }
-        const { startDate, endDate } = parsedTL;
-        if (startDate) {
-          const sd = new Date(startDate);
-          if (!isNaN(sd)) timelineData.startDate = sd;
+        if (tl.startDate) {
+          const sd = new Date(tl.startDate);
+          if (!isNaN(sd)) tlData.startDate = sd;
         }
-        if (endDate) {
-          const ed = new Date(endDate);
-          if (!isNaN(ed)) timelineData.endDate = ed;
+        if (tl.endDate) {
+          const ed = new Date(tl.endDate);
+          if (!isNaN(ed)) tlData.endDate = ed;
         }
       }
 
-      // 7) Determine isActive from timeline
-      const isActiveFlag = computeIsActive(timelineData);
+      // 7) Compute isActive flag
+      const isActiveFlag = computeIsActive(tlData);
 
-      // 8) Handle uploaded images and PDF files
-      let imagePaths = [];
-      if (Array.isArray(req.files['image'])) {
-        imagePaths = req.files['image'].map(file => {
-          return path.join('uploads', path.basename(file.path));
-        });
-      }
+      // 8) Gather uploaded file paths
+      const images = (req.files.image || []).map(f => path.join('uploads', path.basename(f.path)));
+      const creativePDFs = (req.files.creativeBrief || []).map(f => path.join('uploads', path.basename(f.path)));
 
-      let pdfPaths = [];
-      if (Array.isArray(req.files['creativeBrief'])) {
-        pdfPaths = req.files['creativeBrief'].map(file => {
-          return path.join('uploads', path.basename(file.path));
-        });
-      }
-
-      // 9) Construct and save the new Campaign
+      // 9) Build & save the new Campaign
       const newCampaign = new Campaign({
-        brandId: brandId,
-        brandName: brandName,
+        brandId,
+        brandName: brand.name,
         productOrServiceName,
         description,
         targetAudience: audienceData,
-        interestId: validInterestIds,
-        interestName: interestNames.join(','),
+        interestId: validIds,
+        interestName: names.join(','),
         goal,
         creativeBriefText,
         budget,
-        timeline: timelineData,
-        images: imagePaths,
-        creativeBrief: pdfPaths,
+        timeline: tlData,
+        images,
+        creativeBrief: creativePDFs,
         additionalNotes,
         isActive: isActiveFlag
       });
 
       await newCampaign.save();
+
+      const feature = brand.subscription.features.find(f => f.key === 'live_campaigns_limit');
+      if (feature) {
+        feature.used = (feature.used || 0) + 1;
+        await brand.save();
+      }
       return res.status(201).json({ message: 'Campaign created successfully.' });
+
     } catch (error) {
       console.error('Error in createCampaign:', error);
-      return res
-        .status(500)
-        .json({ message: 'Internal server error while creating campaign.' });
+      return res.status(500).json({ message: 'Internal server error while creating campaign.' });
     }
   });
 };
@@ -612,7 +593,7 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     if (search?.trim()) {
       const term = search.trim();
       const or = [
-        { brandName:            { $regex: term, $options: 'i' } },
+        { brandName: { $regex: term, $options: 'i' } },
         { productOrServiceName: { $regex: term, $options: 'i' } }
       ];
       const num = Number(term);
@@ -622,7 +603,7 @@ exports.getCampaignsByInfluencer = async (req, res) => {
 
     // 3) Fetch total + paginated campaigns
     const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
-    const [ total, campaigns ] = await Promise.all([
+    const [total, campaigns] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
         .sort({ createdAt: -1 })
@@ -643,7 +624,7 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     const approvedMap = new Map();
     applyRecs.forEach(r => {
       if (Array.isArray(r.applicants) &&
-          r.applicants.some(a => a.influencerId === influencerId)) {
+        r.applicants.some(a => a.influencerId === influencerId)) {
         appliedSet.add(r.campaignId);
       }
       if (Array.isArray(r.approved) && r.approved.length > 0) {
@@ -654,12 +635,12 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     // 5) Find all Contracts for these campaigns by this influencer
     //    and also pull `isAccepted`
     const contractRecs = await Contract.find({
-      campaignId:   { $in: campaignIds },
+      campaignId: { $in: campaignIds },
       influencerId  // only this influencer
     }, 'campaignId contractId isAccepted').lean();
 
-    const contractMap  = new Map();
-    const acceptedMap  = new Map();
+    const contractMap = new Map();
+    const acceptedMap = new Map();
     contractRecs.forEach(c => {
       contractMap.set(c.campaignId, c.contractId);
       acceptedMap.set(c.campaignId, c.isAccepted === 1 ? 1 : 0);
@@ -669,8 +650,8 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     const annotated = campaigns.map(c => {
       const cid = c.campaignsId;
       const isContracted = contractMap.has(cid) ? 1 : 0;
-      const contractId   = contractMap.get(cid) || null;
-      const isAccepted   = acceptedMap.get(cid) || 0;
+      const contractId = contractMap.get(cid) || null;
+      const isAccepted = acceptedMap.get(cid) || 0;
 
       return {
         ...c,
@@ -684,8 +665,8 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     return res.json({
       meta: {
         total,
-        page:       Number(page),
-        limit:      Number(limit),
+        page: Number(page),
+        limit: Number(limit),
         totalPages: Math.ceil(total / limit)
       },
       campaigns: annotated
@@ -714,7 +695,7 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
     const campaignIds = contractRecs.map(c => c.campaignId);
     if (campaignIds.length === 0) {
       return res.status(200).json({
-        meta:      { total: 0, page, limit, totalPages: 0 },
+        meta: { total: 0, page, limit, totalPages: 0 },
         campaigns: []
       });
     }
@@ -730,12 +711,12 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
     // 3) Build campaign filter (only those assigned + active)
     const filter = {
       campaignsId: { $in: campaignIds },
-      isActive:    1
+      isActive: 1
     };
     if (search?.trim()) {
       const term = search.trim();
-      const or   = [
-        { brandName:            { $regex: term, $options: 'i' } },
+      const or = [
+        { brandName: { $regex: term, $options: 'i' } },
         { productOrServiceName: { $regex: term, $options: 'i' } }
       ];
       const num = Number(term);
@@ -745,8 +726,8 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
 
     // 4) Pagination math
     const pageNum = Math.max(1, page);
-    const lim     = Math.max(1, limit);
-    const skip    = (pageNum - 1) * lim;
+    const lim = Math.max(1, limit);
+    const skip = (pageNum - 1) * lim;
 
     // 5) Count & fetch
     const total = await Campaign.countDocuments(filter);
@@ -763,8 +744,8 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
       return {
         ...c,
         isContracted: 1,                        // by definition
-        contractId:   contractMap.get(cid),
-        isAccepted:   acceptedMap.get(cid) || 0
+        contractId: contractMap.get(cid),
+        isAccepted: acceptedMap.get(cid) || 0
       };
     });
 
@@ -772,8 +753,8 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
     return res.json({
       meta: {
         total,
-        page:       pageNum,
-        limit:      lim,
+        page: pageNum,
+        limit: lim,
         totalPages: Math.ceil(total / lim)
       },
       campaigns: annotated

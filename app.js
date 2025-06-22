@@ -17,6 +17,8 @@ const audienceRoutes      = require('./routes/audienceRoutes');
 const applyCampaingRoutes = require('./routes/applyCampaingRoutes');
 const contractRoutes      = require('./routes/contractRoutes');
 const milestoneRoutes     = require('./routes/milestoneRoutes');
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
+
 // new chat routes
 const chatRoutes          = require('./routes/chatRoutes');
 
@@ -79,6 +81,8 @@ app.use('/audience',   audienceRoutes);
 app.use('/apply',      applyCampaingRoutes);
 app.use('/contract',   contractRoutes);
 app.use('/milestone',  milestoneRoutes);
+app.use('/subscription', subscriptionRoutes);
+
 app.use('/chat', chatRoutes);
 
 // connect to Mongo & start server

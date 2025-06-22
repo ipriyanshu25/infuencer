@@ -5,6 +5,7 @@ const Campaign      = require('../models/campaign');
 const Influencer    = require('../models/influencer');
 const Contract = require('../models/contract'); 
 
+
 exports.applyToCampaign = async (req, res) => {
   const { campaignId, influencerId } = req.body;
   if (!campaignId || !influencerId) {
@@ -12,50 +13,69 @@ exports.applyToCampaign = async (req, res) => {
   }
 
   try {
-    // 1) Lookup influencer to get name
-    const inf = await Influencer.findOne({ influencerId }, 'influencerId name');
+    // ── 0) Load influencer & quota feature ────────────────────────
+    const inf = await Influencer.findOne({ influencerId });
     if (!inf) {
       return res.status(404).json({ message: 'Influencer not found' });
     }
 
-    // 2) Find or create the application record
-    let record = await ApplyCampaing.findOne({ campaignId });
-    if (!record) {
-      // first application for this campaign
-      record = new ApplyCampaing({
-        campaignId,
-        applicants: [{ influencerId, name: inf.name }]
+    // look up the “apply_to_campaigns_quota” feature slot
+    const applyFeature = inf.subscription.features.find(f => f.key === 'apply_to_campaigns_quota');
+    if (!applyFeature) {
+      return res.status(403).json({
+        message: 'Your subscription plan does not permit campaign applications. Please upgrade.'
       });
-    } else {
-      // Check if influencer already applied
-      const already = record.applicants.some(a => a.influencerId === influencerId);
-      if (already) {
-        return res.status(400).json({ message: 'Influencer has already applied to this campaign' });
-      }
-      // add new applicant
-      record.applicants.push({ influencerId, name: inf.name });
     }
 
-    // 3) Save the updated record
+    // if they’ve already used up their quota
+    if (applyFeature.limit > 0 && applyFeature.used >= applyFeature.limit) {
+      return res.status(403).json({
+        message: `Application limit reached (${applyFeature.limit}). Please upgrade your plan to apply more.`
+      });
+    }
+
+    // bump their usage
+    applyFeature.used += 1;
+    await inf.save();
+
+
+    // ── 1) record the application ──────────────────────────────────
+    const name = inf.name; // we already have it
+    let record = await ApplyCampaing.findOne({ campaignId });
+    if (!record) {
+      record = new ApplyCampaing({
+        campaignId,
+        applicants: [{ influencerId, name }]
+      });
+    } else {
+      if (record.applicants.some(a => a.influencerId === influencerId)) {
+        return res.status(400).json({ message: 'You have already applied to this campaign' });
+      }
+      record.applicants.push({ influencerId, name });
+    }
     await record.save();
 
-    // 4) Compute new count and sync to Campaign
+    // ── 2) sync applicantCount back to Campaign ───────────────────
     const applicantCount = record.applicants.length;
     await Campaign.findOneAndUpdate(
       { campaignsId: campaignId },
       { applicantCount }
     );
 
+    // ── 3) respond with remaining quota ───────────────────────────
     return res.status(200).json({
-      message: 'Application recorded',
+      message:                'Application recorded',
       campaignId,
-      applicantCount
+      applicantCount,
+      applicationsRemaining:  applyFeature.limit - applyFeature.used
     });
+
   } catch (err) {
     console.error('Error in applyToCampaign:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
 
 // POST /applyCampaings/list
 // body: { campaignId: String }

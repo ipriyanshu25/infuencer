@@ -15,6 +15,7 @@ const subscriptionFeatureSchema = new mongoose.Schema({
 
 // ─── Subscription sub‐doc ────────────────────────────────
 const subscriptionSchema = new mongoose.Schema({
+  planName: { type: String, required: true, default: 'free' },
   planId: {
     type:     String,
     ref:      'Subscription',

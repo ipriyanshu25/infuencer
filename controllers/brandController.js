@@ -1,15 +1,15 @@
 require('dotenv').config();
-const jwt               = require('jsonwebtoken');
-const Brand             = require('../models/brand');
-const Country           = require('../models/country');
-const Milestone         = require('../models/milestone');
-const Subscription  = require('../models/subscription'); // <-- your plan model
-const JWT_SECRET        = process.env.JWT_SECRET;
+const jwt = require('jsonwebtoken');
+const Brand = require('../models/brand');
+const Country = require('../models/country');
+const Milestone = require('../models/milestone');
+const Subscription = require('../models/subscription'); // <-- your plan model
+const subscriptionHelper = require('../utils/subscriptionHelper');
+const JWT_SECRET = process.env.JWT_SECRET;
 
 
 exports.register = async (req, res) => {
   const { name, email, password, phone, countryId, callingId } = req.body;
-  
   try {
     // 1) Check email uniqueness
     if (await Brand.exists({ email })) {
@@ -23,37 +23,39 @@ exports.register = async (req, res) => {
       return res.status(400).json({ message: 'Invalid country or calling code ID' });
     }
 
-    // 3) Create brand (subscription sub-doc will get its defaults)
+    // 3) Create brand (subscription sub-doc gets defaults)
     const newBrand = new Brand({
       name,
       email,
-      password,       // will be hashed by pre-save hook
+      password, // will be hashed by pre-save hook
       phone,
-      county:        countryDoc.countryName,
-      callingcode:   callingDoc.callingCode,
+      county: countryDoc.countryName,
+      callingcode: callingDoc.callingCode,
       countryId,
       callingId
     });
 
-    // 4) Initial save
-    const savedBrand = await newBrand.save();
+    // 4) Initial save to get subscription defaults
+    let savedBrand = await newBrand.save();
 
-    // 5) Lookup the plan to snapshot features + set expiry
-    const plan = await Subscription.findOne({ planId: savedBrand.subscription.planId }).lean();
-    if (plan) {
-      // 5a) calculate expiresAt (assumes plan.durationInDays or plan.duration)
-      const days = plan.durationInDays ?? plan.duration ?? 0;
-      if (days > 0) {
-        savedBrand.subscription.expiresAt = new Date(Date.now() + days * 86400_000);
-      }
-
-      // 5b) snapshot feature limits
-      savedBrand.subscription.features = plan.features.map(f => ({
+    // 5) Assign default free/baseline plan
+    const freePlan = await subscriptionHelper.getFreePlan('Brand');
+    if (freePlan) {
+      const expires = subscriptionHelper.computeExpiry(freePlan);
+      const featuresSnapshot = freePlan.features.map(f => ({
         key:   f.key,
         limit: typeof f.value === 'number' ? f.value : 0,
         used:  0
       }));
 
+      savedBrand.subscription = {
+        planId:    freePlan.planId,
+        planName:  freePlan.name,
+        startedAt: new Date(),
+        expiresAt: expires,
+        features:  featuresSnapshot
+      };
+      savedBrand.subscriptionExpired = false;
       await savedBrand.save();
     }
 
@@ -62,12 +64,12 @@ exports.register = async (req, res) => {
       message: 'Brand registered successfully',
       brand:   savedBrand
     });
-
   } catch (error) {
-    console.error('Error in brand.register:', error);
+    console.error('Error in register:', error);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
 
 /**
  * Login an existing brand

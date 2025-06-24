@@ -107,8 +107,7 @@ exports.createCampaign = (req, res) => {
       const used = liveCap ? liveCap.used : 0;
       if (limit > 0 && used >= limit) {
         return res.status(403).json({
-          message: `You have reached this cycle’s campaign quota (${limit}). `
-            + `It will reset on ${brand.subscription.expiresAt.toISOString()}.`
+          message: `You have reached this cycle’s campaign quota ${limit}. `
         });
       }
 

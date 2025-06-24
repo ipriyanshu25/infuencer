@@ -93,51 +93,56 @@ exports.deletePlan = async (req, res) => {
 
 
 exports.assignPlan = async (req, res) => {
-  const { userType, userId, planId } = req.body;
-  if (!userType || !userId || !planId) {
-    return res.status(400).json({ message: 'userType, userId & planId are required' });
+  try {
+    const { userType, userId, planId } = req.body;
+    if (!userType || !userId || !planId) {
+      return res.status(400).json({ message: 'userType, userId & planId are required' });
+    }
+
+    const Model = userType === 'Brand' ? Brand : Influencer;
+    const plan = await SubscriptionPlan.findOne({ planId }).lean();
+    if (!plan) {
+      return res.status(404).json({ message: 'Plan not found' });
+    }
+
+    const now = new Date();
+    const expire = subscriptionHelper.computeExpiry(plan);
+
+    const featureSnapshot = plan.features.map(f => ({
+      key:   f.key,
+      limit: typeof f.value === 'number' ? f.value : 0,
+      used:  0
+    }));
+
+    const update = {
+      'subscription.planId':    plan.planId,
+      'subscription.planName':  plan.name,
+      'subscription.startedAt': now,
+      'subscription.expiresAt': expire,
+      'subscription.features':  featureSnapshot,
+      subscriptionExpired:      false
+    };
+
+    const query = userType === 'Brand'
+      ? { brandId: userId }
+      : { influencerId: userId };
+
+    const updated = await Model.findOneAndUpdate(query, update, {
+      new: true,
+      runValidators: true
+    });
+    if (!updated) {
+      return res.status(404).json({ message: `${userType} with ID ${userId} not found` });
+    }
+
+    return res.json({
+      message: `${userType} subscribed to "${plan.name}". It will expire at ${expire.toISOString()}"`,
+      subscription: updated.subscription
+    });
+  } catch (error) {
+    console.error('Error in assignPlan:', error);
+    return res.status(500).json({ message: 'Internal server error while assigning plan.' });
   }
-
-  const Model = userType === 'Brand' ? Brand : Influencer;
-  const plan = await SubscriptionPlan.findOne({ planId });
-  if (!plan) {
-    return res.status(404).json({ message: 'Plan not found' });
-  }
-
-  const now = new Date();
-  // expire in 5 minutes
-  const expire = subscriptionHelper.computeExpiry(plan);
-
-  const featureSnapshot = plan.features.map(f => ({
-    key:   f.key,
-    limit: typeof f.value === 'number' ? f.value : 0,
-    used:  0
-  }));
-
-  const update = {
-    'subscription.planId':    planId,
-    'subscription.startedAt': now,
-    'subscription.expiresAt': expire,
-    'subscription.features':  featureSnapshot,
-    subscriptionExpired:      false
-  };
-
-  const query = userType === 'Brand'
-    ? { brandId: userId }
-    : { influencerId: userId };
-
-  const updated = await Model.findOneAndUpdate(query, update, {
-    new: true,
-    runValidators: true
-  });
-  if (!updated) {
-    return res.status(404).json({ message: `${userType} with ID ${userId} not found` });
-  }
-
-  return res.json({
-    message: `${userType} subscribed to "${plan.name}". It will expire at ${expire.toISOString()}"`,
-    subscription: updated.subscription
-  });
 };
 
 
@@ -203,114 +208,3 @@ exports.getMyPlan = async (req, res) => {
     expired: user.subscriptionExpired
   });
 };
-
-
-
-// POST /subscription-plans/assign
-// body: { userType: 'Brand'|'Influencer', userId, planId, durationMonths? }
-
-
-// exports.assignPlan = async (req, res) => {
-//   const { userType, userId, planId, durationMonths } = req.body;
-//   if (!userType || !userId || !planId) {
-//     return res.status(400).json({ message: 'userType, userId & planId are required' });
-//   }
-
-//   const Model = userType === 'Brand' ? Brand : Influencer;
-//   const plan = await SubscriptionPlan.findOne({ planId });
-//   if (!plan) {
-//     return res.status(404).json({ message: 'Plan not found' });
-//   }
-
-//   const now = new Date();
-//   const months = durationMonths != null ? Number(durationMonths) : 1;
-//   const expire = new Date(now.getTime() + (plan.durationDays || 30) * months * 24 * 60 * 60 * 1000);
-
-//   const featureSnapshot = plan.features.map(f => ({
-//     key:   f.key,
-//     limit: typeof f.value === 'number' ? f.value : 0,
-//     used:  0
-//   }));
-
-//   const update = {
-//     'subscription.planId':    planId,
-//     'subscription.startedAt': now,
-//     'subscription.expiresAt': expire,
-//     'subscription.features':  featureSnapshot,
-//     subscriptionExpired:      false
-//   };
-
-//   const query = userType === 'Brand'
-//     ? { brandId: userId }
-//     : { influencerId: userId };
-
-//   const updated = await Model.findOneAndUpdate(query, update, {
-//     new: true,
-//     runValidators: true
-//   });
-//   if (!updated) {
-//     return res.status(404).json({ message: `${userType} with ID ${userId} not found` });
-//   }
-
-//   return res.json({
-//     message: `${userType} subscribed to "${plan.name}" for ${months} month(s)"`,
-//     subscription: updated.subscription
-//   });
-// };
-
-
-
-
-// POST /subscription-plans/renew
-// body: { userType: 'Brand'|'Influencer', userId }
-
-
-
-
-// exports.renewPlan = async (req, res) => {
-//   const { userType, userId } = req.body;
-//   if (!userType || !userId) {
-//     return res.status(400).json({ message: 'userType & userId required' });
-//   }
-
-//   const Model = userType === 'Brand' ? Brand : Influencer;
-//   const user = await Model.findOne(
-//     userType === 'Brand' ? { brandId: userId } : { influencerId: userId }
-//   );
-//   if (!user) {
-//     return res.status(404).json({ message: `${userType} with ID ${userId} not found` });
-//   }
-
-//   const plan = await SubscriptionPlan.findOne({ planId: user.subscription.planId });
-//   if (!plan) {
-//     return res.status(404).json({ message: 'Plan not found' });
-//   }
-
-//   const now = new Date();
-//   const durationDays = plan.durationDays || 30;
-//   let newExpires;
-
-//   if (user.subscription.expiresAt && user.subscription.expiresAt > now) {
-//     newExpires = new Date(user.subscription.expiresAt.getTime() + durationDays * 24 * 60 * 60 * 1000);
-//   } else {
-//     newExpires = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
-//     user.subscription.startedAt = now;
-//   }
-
-//   user.subscription.features = plan.features.map(f => ({
-//     key:   f.key,
-//     limit: typeof f.value === 'number' ? f.value : 0,
-//     used:  0
-//   }));
-//   user.subscription.expiresAt = newExpires;
-//   user.subscriptionExpired = false;
-
-//   await user.save();
-
-//   return res.json({
-//     message: `${userType} subscription renewed until ${newExpires.toISOString()}`,
-//     subscription: user.subscription
-//   });
-// };
-// POST /subscription-plans/renew
-// body: { userType: 'Brand'|'Influencer', userId }

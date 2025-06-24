@@ -17,7 +17,10 @@ const subscriptionFeatureSchema = new mongoose.Schema({
 // ——— Main Influencer schema ———
 const influencerSchema = new mongoose.Schema({
   influencerId: {
-    type: String, required: true, unique: true, default: uuidv4
+    type: String,
+    required: true,
+    unique: true,
+    default: uuidv4
   },
   name:       { type: String, required: true },
   email:      { type: String, required: true, unique: true, match: [emailRegex, 'Invalid email'] },
@@ -60,6 +63,12 @@ const influencerSchema = new mongoose.Schema({
       type: [subscriptionFeatureSchema],
       default: []
     }
+  },
+
+  // Flag to indicate if a paid subscription has expired
+  subscriptionExpired: {
+    type: Boolean,
+    default: false
   }
 }, { timestamps: true });
 

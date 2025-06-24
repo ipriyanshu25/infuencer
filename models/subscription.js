@@ -25,7 +25,25 @@ const subscriptionPlanSchema = new mongoose.Schema({
   },
   monthlyCost: {
     type: Number,
-    required: true
+    required: true,
+    min: 0
+  },
+  // Number of days each billing cycle lasts (e.g., 30-day rental)
+  durationDays: {
+    type: Number,
+    default: 30,
+    min: 1
+  },
+  // If true, plan will auto-renew (e.g., free tiers)
+  autoRenew: {
+    type: Boolean,
+    default: false
+  },
+  // Allows deactivating or archiving a plan without deletion
+  status: {
+    type: String,
+    enum: ['active', 'inactive'],
+    default: 'active'
   },
   features: {
     type: [featureSchema],

@@ -1,20 +1,18 @@
 // routes/subscriptionPlanRoutes.js
 const express = require('express');
-const router = express.Router();
-const ctrl = require('../controllers/subscriptionController');
+const router  = express.Router();
+const ctrl    = require('../controllers/subscriptionController');
 
-router.post('/list', ctrl.getPlans);
-
-router.get('/getById', ctrl.getPlanById);
-
+// Plan CRUD
 router.post('/create', ctrl.createPlan);
-
+router.post('/list',   ctrl.getPlans);
+router.get ('/getById',ctrl.getPlanById);
 router.post('/update', ctrl.updatePlan);
-
 router.post('/delete', ctrl.deletePlan);
 
+// Subscription actions
 router.post('/assign', ctrl.assignPlan);
-
-router.post('/me', ctrl.getMyPlan);
+router.post('/renew',  ctrl.renewPlan);
+router.post('/me',     ctrl.getMyPlan);
 
 module.exports = router;

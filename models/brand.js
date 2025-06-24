@@ -1,6 +1,6 @@
 // models/brand.js
-const mongoose = require('mongoose');
-const bcrypt   = require('bcryptjs');
+const mongoose      = require('mongoose');
+const bcrypt        = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 
 const emailRegex = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}$/;
@@ -9,29 +9,21 @@ const phoneRegex = /^[0-9]{10}$/;
 // ─── Feature quota snapshot ─────────────────────────────
 const subscriptionFeatureSchema = new mongoose.Schema({
   key:   { type: String, required: true },
-  limit: { type: Number, required: true },  // max allowed per plan
-  used:  { type: Number, default: 0 }       // increments as they use
+  limit: { type: Number, required: true },
+  used:  { type: Number, default: 0 }
 }, { _id: false });
 
 // ─── Subscription sub‐doc ────────────────────────────────
 const subscriptionSchema = new mongoose.Schema({
   planId: {
-    type: String,
-    ref:  'SubscriptionPlan',
+    type:     String,
+    ref:      'Subscription',
     required: true,
-    default: 'ca41f2c1-7fbd-4e22-b27c-d537ecbaf02a'
+    default:  'ca41f2c1-7fbd-4e22-b27c-d537ecbaf02a'
   },
-  startedAt: {
-    type: Date,
-    default: Date.now
-  },
-  expiresAt: {
-    type: Date
-  },
-  features: {
-    type: [subscriptionFeatureSchema],
-    default: []
-  }
+  startedAt: { type: Date,   default: Date.now },
+  expiresAt: { type: Date },
+  features:  { type: [subscriptionFeatureSchema], default: [] }
 }, { _id: false });
 
 // ─── Brand schema ────────────────────────────────────────
@@ -45,10 +37,15 @@ const brandSchema = new mongoose.Schema({
   callingcode: { type: String, required: true },
   countryId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true },
   callingId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true },
-  createdAt:   { type: Date, default: Date.now },
+  createdAt:   { type: Date,   default: Date.now },
 
-  // ← embed the subscription sub‐document
-  subscription: subscriptionSchema,
+  // ensure the sub-doc always exists
+  subscription: {
+    type:    subscriptionSchema,
+    default: () => ({})
+  },
+
+  subscriptionExpired: { type: Boolean, default: false }
 }, { timestamps: true });
 
 // Hash password before saving

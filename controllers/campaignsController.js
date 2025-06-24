@@ -102,7 +102,7 @@ exports.createCampaign = (req, res) => {
 
       // 3) Enforce “live_campaigns_limit”
       // 3) Enforce “live_campaigns_limit” **per subscription cycle**
-      const liveCap = getFeature(brand.subscription, 'live_campaigns_limit');
+      const liveCap = getFeature.getFeature(brand.subscription, 'live_campaigns_limit');
       const limit = liveCap ? liveCap.limit : 0;           // 0 → unlimited
       const used = liveCap ? liveCap.used : 0;
       if (limit > 0 && used >= limit) {

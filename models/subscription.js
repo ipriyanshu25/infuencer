@@ -21,7 +21,7 @@ const subscriptionPlanSchema = new mongoose.Schema({
   status:    { type: String, enum: ['active', 'archived'], default: 'active' },
 
   /** How long one cycle lasts (mins) – handy for local testing */
-  durationMins: { type: Number, default: 2 },        // 30 days
+  durationMins: { type: Number, default: 43200 },        // 30 days
 
   createdAt: { type: Date, default: Date.now }
 });

@@ -64,9 +64,10 @@
 
 const cron = require('node-cron');
 const SubscriptionPlan = require('../models/subscription');
-const Brand            = require('../models/brand');
-const Influencer       = require('../models/influencer');
-
+const Brand = require('../models/brand');
+const Influencer = require('../models/influencer');
+const subscriptionHelper = require('../utils/subscriptionHelper');
+// Adjust path as needed
 /**
  * Core logic to refresh subscriptions:
  * - Auto-renew free plans every 5 minutes
@@ -83,10 +84,13 @@ async function refreshSubscriptions() {
   const autoIds = autoPlans.map(p => p.planId);
 
   // 2) Process Brands & Influencers
-  for (const [Model, idField] of [[Brand, 'brandId'], [Influencer, 'influencerId']]) {
+  for (const { Model, idField, role } of [
+    { Model: Brand, idField: 'brandId', role: 'Brand' },
+    { Model: Influencer, idField: 'influencerId', role: 'Influencer' }
+  ]) {
     // A) Auto-renew free subscriptions after 5 minutes
     const renewUsers = await Model.find({
-      'subscription.planId':   { $in: autoIds },
+      'subscription.planId': { $in: autoIds },
       'subscription.expiresAt': { $lte: now }
     });
     for (const user of renewUsers) {
@@ -99,15 +103,40 @@ async function refreshSubscriptions() {
     }
 
     // B) Expire paid subscriptions (autoRenew=false)
+    // const expireUsers = await Model.find({
+    //   'subscription.planId':   { $nin: autoIds },
+    //   'subscription.expiresAt': { $lte: now },
+    //   subscriptionExpired:      { $ne: true }
+    // });
+    // for (const user of expireUsers) {
+    //   user.subscriptionExpired = true;
+    //   await user.save();
+    //   console.log(`⏰ Expired ${Model.modelName} ${user[idField]} at ${now.toISOString()}`);
+    // }
+
+
+
     const expireUsers = await Model.find({
-      'subscription.planId':   { $nin: autoIds },
-      'subscription.expiresAt': { $lte: now },
-      subscriptionExpired:      { $ne: true }
+      'subscription.planId': { $nin: autoIds },
+      'subscription.expiresAt': { $lte: now }
     });
+
     for (const user of expireUsers) {
-      user.subscriptionExpired = true;
+      // Downgrade to the free/basic tier
+      const freePlan = await subscriptionHelper.getFreePlan(role);
+
+      const newExpire = subscriptionHelper.computeExpiry(freePlan);
+
+      user.subscription.planId = freePlan.planId;
+      user.subscription.startedAt = now;
+      user.subscription.expiresAt = newExpire;
+      user.subscription.features = freePlan.features.map(f => ({
+        key: f.key, limit: typeof f.value === 'number' ? f.value : 0, used: 0
+      }));
+      user.subscriptionExpired = false;       // 👉 they still have a plan
+
       await user.save();
-      console.log(`⏰ Expired ${Model.modelName} ${user[idField]} at ${now.toISOString()}`);
+      console.log(`⬇️  Downgraded ${role} ${user[idField]} → free until ${newExpire.toISOString()}`);
     }
   }
 }

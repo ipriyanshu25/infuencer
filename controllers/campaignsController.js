@@ -12,6 +12,7 @@ const ApplyCampaign = require('../models/applyCampaign');
 const Influencer = require('../models/influencer');
 const Contract = require('../models/contract');
 const SubscriptionPlan = require('../models/subscription');
+const getFeature = require('../utils/getFeature');
 
 
 // ===============================
@@ -100,15 +101,15 @@ exports.createCampaign = (req, res) => {
       }
 
       // 3) Enforce “live_campaigns_limit”
-      const liveCapFeature = plan.features.find(f => f.key === 'live_campaigns_limit');
-      const limit = liveCapFeature ? liveCapFeature.value : 0; // 0 means “unlimited”
-      if (limit > 0) {
-        const activeCount = await Campaign.countDocuments({ brandId, isActive: 1 });
-        if (activeCount >= limit) {
-          return res.status(403).json({
-            message: `Active‐campaigns limit reached (${limit}). Upgrade your plan to create more.`
-          });
-        }
+      // 3) Enforce “live_campaigns_limit” **per subscription cycle**
+      const liveCap = getFeature(brand.subscription, 'live_campaigns_limit');
+      const limit = liveCap ? liveCap.limit : 0;           // 0 → unlimited
+      const used = liveCap ? liveCap.used : 0;
+      if (limit > 0 && used >= limit) {
+        return res.status(403).json({
+          message: `You have reached this cycle’s campaign quota (${limit}). `
+            + `It will reset on ${brand.subscription.expiresAt.toISOString()}.`
+        });
       }
 
       // 4) Parse & normalize targetAudience JSON
@@ -194,10 +195,11 @@ exports.createCampaign = (req, res) => {
 
       await newCampaign.save();
 
-      const feature = brand.subscription.features.find(f => f.key === 'live_campaigns_limit');
-      if (feature) {
-        feature.used = (feature.used || 0) + 1;
-        await brand.save();
+      if (limit > 0) {
+        await Brand.updateOne(
+          { brandId, 'subscription.features.key': 'live_campaigns_limit' },
+          { $inc: { 'subscription.features.$.used': 1 } }
+        );
       }
       return res.status(201).json({ message: 'Campaign created successfully.' });
 

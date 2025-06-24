@@ -30,7 +30,9 @@ async function refreshSubscriptions() {
       'subscription.expiresAt': { $lte: now }
     });
     for (const user of renewUsers) {
-      const expire = new Date(now.getTime() + 5 * 60 * 1000);
+      const plan = await SubscriptionPlan.findOne({ planId: user.subscription.planId }).lean();
+      if (!plan) continue; 
+      const expire = subscriptionHelper.computeExpiry(plan);
       user.subscription.startedAt = now;
       user.subscription.expiresAt = expire;
       user.subscriptionExpired = false;
@@ -50,7 +52,7 @@ async function refreshSubscriptions() {
       const newExpire = subscriptionHelper.computeExpiry(freePlan);
 
       user.subscription.planId = freePlan.planId;
-      user.subscription.planName  = freePlan.name;
+      user.subscription.planName = freePlan.name;
       user.subscription.startedAt = now;
       user.subscription.expiresAt = newExpire;
       user.subscription.features = freePlan.features.map(f => ({

@@ -18,6 +18,7 @@ const applyCampaingRoutes = require('./routes/applyCampaingRoutes');
 const contractRoutes      = require('./routes/contractRoutes');
 const milestoneRoutes     = require('./routes/milestoneRoutes');
 const subscriptionRoutes = require('./routes/subscriptionRoutes');
+const paymentRoutes      = require('./routes/paymentRoutes');
 
 // new chat routes
 const chatRoutes          = require('./routes/chatRoutes');
@@ -83,8 +84,8 @@ app.use('/apply',      applyCampaingRoutes);
 app.use('/contract',   contractRoutes);
 app.use('/milestone',  milestoneRoutes);
 app.use('/subscription', subscriptionRoutes);
-
 app.use('/chat', chatRoutes);
+app.use('/payment', paymentRoutes);
 
 // connect to Mongo & start server
 const PORT = process.env.PORT || 5000;

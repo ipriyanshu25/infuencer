@@ -85,15 +85,7 @@ exports.verifyPayment = async (req, res) => {
       { new: true }
     );
 
-    // auto-assign subscription
-    const assignUrl = `${process.env.BASE_URL}/subscription/assign`;
-    await axios.post(assignUrl, {
-      userType: paymentRecord.role,
-      userId:   paymentRecord.brandId,
-      planId:   paymentRecord.planId
-    });
-
-    res.json({ success: true, message: 'Payment verified, captured, and plan assigned' });
+    res.json({ success: true, message: 'Payment verified Successfully' });
   } catch (error) {
     console.error('Error in verifyPayment:', error);
     res.status(500).json({ success: false, message: error.message });

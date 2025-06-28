@@ -9,9 +9,9 @@ const phoneRegex = /^[0-9]{10}$/;
 
 // ——— Define a small sub-schema for per-feature quotas ———
 const subscriptionFeatureSchema = new mongoose.Schema({
-  key:   { type: String, required: true },
-  limit: { type: Number, required: true, default: 0 },
-  used:  { type: Number, required: true, default: 0 }
+  key:   { type: String, required: true},
+  limit: { type: Number, required: true},
+  used:  { type: Number, required: true}
 }, { _id: false });
 
 // ——— Main Influencer schema ———
@@ -45,6 +45,7 @@ const influencerSchema = new mongoose.Schema({
 
   // ——— Subscription subdoc ———
   subscription: {
+    planName: { type: String, required: true, default: 'free' },
     planId: {
       type: String,
       ref: 'SubscriptionPlan',

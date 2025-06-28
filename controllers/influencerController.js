@@ -1,4 +1,3 @@
-// controllers/influencerController.js
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
@@ -7,7 +6,7 @@ const Country = require('../models/country');
 const Interest = require('../models/interest');
 const Campaign = require('../models/campaign'); 
 const AudienceRange = require('../models/audience');
-
+const subscriptionHelper = require('../utils/subscriptionHelper');
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // Register a new influencer
@@ -18,10 +17,10 @@ exports.register = async (req, res) => {
     password,
     phone,
     socialMedia,
-    categoryId,      // ← now a reference to Interest
-    audienceId,      // ← new: reference to AudienceRange
-    countryId,       // ← reference to Country
-    callingId,       // ← reference to Country for calling code
+    categoryId,
+    audienceId,
+    countryId,
+    callingId,
     bio
   } = req.body;
 
@@ -39,30 +38,22 @@ exports.register = async (req, res) => {
       Country.findById(callingId)
     ]);
 
-    if (!interestDoc) {
-      return res.status(400).json({ message: 'Invalid interest/category ID' });
-    }
-    if (!audienceDoc) {
-      return res.status(400).json({ message: 'Invalid audience range ID' });
-    }
-    if (!countryDoc) {
-      return res.status(400).json({ message: 'Invalid country ID' });
-    }
-    if (!callingDoc) {
-      return res.status(400).json({ message: 'Invalid calling code ID' });
-    }
+    if (!interestDoc) return res.status(400).json({ message: 'Invalid interest/category ID' });
+    if (!audienceDoc) return res.status(400).json({ message: 'Invalid audience range ID' });
+    if (!countryDoc) return res.status(400).json({ message: 'Invalid country ID' });
+    if (!callingDoc) return res.status(400).json({ message: 'Invalid calling code ID' });
 
     // 3. Derive human-readable fields
-    const categoryName   = interestDoc.name;          // assuming Interest schema has `name`
-    const audienceRange  = audienceDoc.range;         // assuming AudienceRange schema has `range`
-    const countryName    = countryDoc.countryName;
-    const callingCode    = callingDoc.callingCode;
+    const categoryName  = interestDoc.name;
+    const audienceRange = audienceDoc.range;
+    const countryName   = countryDoc.countryName;
+    const callingCode   = callingDoc.callingCode;
 
-    // 4. Create and save
+    // 4. Create and save influencer
     const newInfluencer = new Influencer({
       name,
       email,
-      password,           // will be hashed by pre-save hook
+      password,
       phone,
       socialMedia,
       categoryId,
@@ -76,9 +67,36 @@ exports.register = async (req, res) => {
       bio
     });
 
-    await newInfluencer.save();
+    // Initial save to get base document and default subscription
+    let savedInfluencer = await newInfluencer.save();
 
-    return res.status(201).json({ message: 'Influencer registered successfully' });
+    // 5. Assign default free subscription
+    const freePlan = await subscriptionHelper.getFreePlan('Influencer');
+    if (freePlan) {
+      const expires = subscriptionHelper.computeExpiry(freePlan);
+      const featuresSnapshot = freePlan.features.map(f => ({
+        key:   f.key,
+        limit: typeof f.value === 'number' ? f.value : 0,
+        used:  0
+      }));
+
+      savedInfluencer.subscription = {
+        planId:    freePlan.planId,
+        planName:  freePlan.name,
+        startedAt: new Date(),
+        expiresAt: expires,
+        features:  featuresSnapshot
+      };
+      savedInfluencer.subscriptionExpired = false;
+      await savedInfluencer.save();
+    }
+
+    // 6. Respond with created influencer
+    return res.status(201).json({
+      message: 'Influencer registered successfully',
+      influencerId: savedInfluencer.influencerId,
+      subscription: savedInfluencer.subscription
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: 'Internal server error' });
@@ -157,17 +175,14 @@ exports.getList = async (req, res) => {
   }
 };
 
-// Get a single influencer by influencerId (via query param ?influencerId=...)
+// Get a single influencer by influencerId
 exports.getById = async (req, res) => {
   const { id } = req.query;
   if (!id) {
     return res.status(400).json({ message: 'influencerId query parameter is required' });
   }
   try {
-    const influencer = await Influencer.findOne(
-      { influencerId: id },
-      '-password -__v'
-    );
+    const influencer = await Influencer.findOne({ influencerId: id }, '-password -__v');
     if (!influencer) {
       return res.status(404).json({ message: 'Influencer not found' });
     }

@@ -9,4 +9,4 @@ exports.getFreePlan = role =>
 
 /** Compute expiry from now + plan.durationMins */
 exports.computeExpiry = plan =>
-  new Date(Date.now() + (plan.durationMins || 43200) * 60 * 1000);  //4320 mins = 30 days
+  new Date(Date.now() + (plan.durationMins || 43200) * 60 * 1000);  //43200 mins = 30 days

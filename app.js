@@ -114,7 +114,7 @@ wss.on('connection', (ws, req) => {
 
 // CORS + body parsers
 app.use(cors({
-  origin:      process.env.FRONTEND_ORIGIN || 'http://localhost:3001',
+  origin:      process.env.FRONTEND_ORIGIN || 'http://collabglam.com',
   credentials: true
 }));
 app.use(express.json());

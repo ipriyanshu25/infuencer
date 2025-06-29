@@ -1,8 +1,10 @@
 require('dotenv').config();
 const Razorpay = require('razorpay');
+const mongoose = require('mongoose');
 const crypto = require('crypto');
-const axios = require('axios');
 const Payment = require('../models/payment');
+const Brand = require('../models/brand');  // Assuming Brand model exists
+const Influencer = require('../models/influencer');  // Assuming Influencer model exists
 
 // initialize Razorpay client
 const razorpay = new Razorpay({
@@ -11,14 +13,30 @@ const razorpay = new Razorpay({
 });
 
 /**
- * Create a new Razorpay order and persist it
+ * Create a new Razorpay order and persist it based on userId (either brandId or influencerId)
  */
 exports.createOrder = async (req, res) => {
   try {
-    const { amount, currency = 'USD', receipt, brandId, planId, role } = req.body;
-    if (!brandId || !planId || !role) {
-      return res.status(400).json({ success: false, message: 'brandId, planId and role are required' });
+    const { amount, currency = 'USD', receipt, userId, role, planId } = req.body;
+
+    // Check if required fields are present
+    if (!userId || !role || !planId || !amount) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
+
+    // Fetch brand or influencer based on userId and role
+    let user;
+    if (role === 'Brand') {
+      // Query by the `brandId` (which is a string UUID)
+      user = await Brand.findOne({ brandId: userId });
+    } else if (role === 'Influencer') {
+      user = await Influencer.findOne({ influencerId: userId });
+    }
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
     // amount in cents for USD
     const options = {
       amount: Math.round(amount * 100),
@@ -29,16 +47,16 @@ exports.createOrder = async (req, res) => {
     // create order in Razorpay
     const order = await razorpay.orders.create(options);
 
-    // save to DB with brand, plan and role reference
+    // save to DB with user (brand or influencer), plan and role reference
     await Payment.create({
-      orderId:   order.id,
-      amount:    order.amount,
-      currency:  order.currency,
-      receipt:   order.receipt,
-      brandId,
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      receipt: order.receipt,
+      userId, // Store the UUID userId
       planId,
       role,
-      status:    'created',
+      status: 'created',
       createdAt: new Date()
     });
 
@@ -49,8 +67,9 @@ exports.createOrder = async (req, res) => {
   }
 };
 
+
 /**
- * Verify payment signature, update status, and auto-assign plan
+ * Verify payment signature, update status, and auto-assign plan based on userId (brandId or influencerId)
  */
 exports.verifyPayment = async (req, res) => {
   try {
@@ -85,7 +104,7 @@ exports.verifyPayment = async (req, res) => {
       { new: true }
     );
 
-    res.json({ success: true, message: 'Payment verified Successfully' });
+    res.json({ success: true, message: 'Payment verified successfully' });
   } catch (error) {
     console.error('Error in verifyPayment:', error);
     res.status(500).json({ success: false, message: error.message });

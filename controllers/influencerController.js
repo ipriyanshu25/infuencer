@@ -165,6 +165,15 @@ exports.verifyToken = (req, res, next) => {
   });
 };
 
+exports.getList = async (req, res) => {
+  try {
+    const influencers = await Influencer.find({}, '-password -__v');
+    return res.status(200).json(influencers);
+  } catch (error) {
+    console.error('Error fetching influencers:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
 
 // Get a single influencer by influencerId
 exports.getById = async (req, res) => {

@@ -2,7 +2,7 @@
 const jwt = require('jsonwebtoken');
 const Admin = require('../models/admin');
 const Brand = require('../models/brand'); // Assuming you have a Brand model
-
+const Influencer = require('../models/influencer'); // Assuming you have an Influencer model
 /**
  * POST /admin/login
  * body: { email, password }

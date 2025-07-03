@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const Admin = require('../models/admin');
 const Brand = require('../models/brand'); // Assuming you have a Brand model
 const Influencer = require('../models/influencer'); // Assuming you have an Influencer model
+const Campaign = require('../models/campaign');
 /**
  * POST /admin/login
  * body: { email, password }
@@ -123,6 +124,69 @@ exports.getList = async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching influencers:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+exports.getAllCampaigns = async (req, res) => {
+  try {
+    // 1) Parse pagination, search, sort & status from body
+    const page       = Math.max(parseInt(req.body.page, 10)  || 1,  1);
+    const limit      = Math.min(Math.max(parseInt(req.body.limit, 10) || 10, 1), 100);
+    const search     = (req.body.search || '').trim();
+    const sortBy     = req.body.sortBy    || 'createdAt';
+    const sortOrder  = (req.body.sortOrder || 'desc').toLowerCase();
+    const statusFlag = parseInt(req.body.type, 10) || 0;  // 0 = all, 1 = active, 2 = inactive
+
+    // 2) Build filter
+    const filter = {};
+
+    // 2a) text search on brandName, productOrServiceName or description
+    if (search) {
+      const re = new RegExp(search, 'i');
+      filter.$or = [
+        { brandName:           re },
+        { productOrServiceName: re },
+        { description:         re }
+      ];
+    }
+
+    // 2b) status filtering on isActive
+    if (statusFlag === 1) {
+      filter.isActive = 1;
+    } else if (statusFlag === 2) {
+      filter.isActive = 0;
+    }
+    // (statusFlag === 0 → no filter)
+
+    // 3) Count for pagination meta
+    const total = await Campaign.countDocuments(filter);
+
+    // 4) Validate sort field & direction
+    const ALLOWED_SORT = ['brandName','productOrServiceName','createdAt','timeline.startDate','timeline.endDate'];
+    const field = ALLOWED_SORT.includes(sortBy) ? sortBy : 'createdAt';
+    const dir   = sortOrder === 'asc' ? 1 : -1;
+
+    // 5) Fetch paged results
+    const campaigns = await Campaign.find(filter)
+      .select('-__v')
+      .sort({ [field]: dir })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    // 6) Return structured response
+    return res.status(200).json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      status:     statusFlag,
+      campaigns
+    });
+  } catch (err) {
+    console.error('Error in getAllCampaigns:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };

@@ -190,3 +190,26 @@ exports.getAllCampaigns = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+exports.getBrandById = async (req, res) => {
+  try {
+    const brandId = req.query.id;
+    if (!brandId) return res.status(400).json({ message: 'Query parameter id is required.' });
+
+    // exclude password, internal fields
+    const brandDoc = await Brand.findOne({ brandId })
+      .select('-password -_id -__v')
+      .lean();
+    if (!brandDoc) return res.status(404).json({ message: 'Brand not found.' });
+
+    // fetch wallet balance
+    const milestoneDoc = await Milestone.findOne({ brandId }).lean();
+    const walletBalance = milestoneDoc ? milestoneDoc.walletBalance : 0;
+
+    return res.status(200).json({ ...brandDoc, walletBalance });
+  } catch (error) {
+    console.error('Error in getBrandById:', error);
+    return res.status(500).json({ message: 'Internal server error while fetching brand.' });
+  }
+};

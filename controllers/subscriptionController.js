@@ -54,21 +54,28 @@ exports.getPlanById = async (req, res) => {
 // POST /subscription-plans/update
 // body: { id: planId, ...fieldsToUpdate }
 exports.updatePlan = async (req, res) => {
-  const { id, ...updates } = req.body;
-  if (!id) {
-    return res.status(400).json({ message: 'Plan id is required' });
+  // Pull planId out, everything else becomes the updates
+  const { planId, ...updates } = req.body;
+
+  if (!planId) {
+    return res.status(400).json({ message: 'planId is required' });
   }
+
   try {
     const plan = await SubscriptionPlan.findOneAndUpdate(
-      { planId: id },
-      updates,
+      { planId },          // search criterion
+      updates,             // fields to change
       { new: true, runValidators: true }
     ).lean();
-    if (!plan) return res.status(404).json({ message: 'Plan not found' });
-    res.status(200).json({ message: 'Plan updated', plan });
+
+    if (!plan) {
+      return res.status(404).json({ message: 'Plan not found' });
+    }
+
+    return res.status(200).json({ message: 'Plan updated', plan });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Internal server error' });
+    console.error('Error updating plan:', err);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 };
 

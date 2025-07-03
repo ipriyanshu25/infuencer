@@ -70,8 +70,6 @@ exports.getAllBrands = async (req, res) => {
       limit,
       total,
       totalPages: Math.ceil(total / limit),
-      sortBy: sortField,
-      sortOrder: direction === 1 ? 'asc' : 'desc',
       brands
     });
   } catch (error) {

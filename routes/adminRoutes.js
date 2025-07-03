@@ -12,4 +12,5 @@ router.get('/brand/getById', getBrandById);
 router.get('/influencer/getById', getByInfluencerId);
 router.get('/campaign/getById', getCampaignById);
 router.post('/campaign/getByBrandId', getCampaignsByBrandId);
+
 module.exports = router;

@@ -2,7 +2,7 @@
 
 const express = require('express');
 const router  = express.Router();
-const { register, login,verifyToken,getBrandById,getAllBrands } = require('../controllers/brandController');
+const { register, login,verifyToken,getBrandById} = require('../controllers/brandController');
 
 // POST /brand/register → register a new brand
 router.post('/register', register);
@@ -13,11 +13,6 @@ router.get(
   '/',
   verifyToken,
   getBrandById
-);
-router.post(
-  '/getAll',
-  verifyToken,
-  getAllBrands
 );
 
 module.exports = router;

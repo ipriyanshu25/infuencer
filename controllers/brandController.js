@@ -150,17 +150,4 @@ exports.getBrandById = async (req, res) => {
   }
 };
 
-/**
- * GET /brand/all
- */
-exports.getAllBrands = async (req, res) => {
-  try {
-    const brands = await Brand.find()
-      .select('-password -_id -__v')
-      .lean();
-    return res.status(200).json({ brands });
-  } catch (error) {
-    console.error('Error in getAllBrands:', error);
-    return res.status(500).json({ message: 'Internal server error' });
-  }
-};
+

@@ -21,6 +21,7 @@ const milestoneRoutes     = require('./routes/milestoneRoutes');
 const subscriptionRoutes  = require('./routes/subscriptionRoutes');
 const paymentRoutes       = require('./routes/paymentRoutes');
 const chatRoutes          = require('./routes/chatRoutes');
+const adminRoutes         = require('./routes/adminRoutes'); // Assuming you have this route
 
 const app    = express();
 const server = http.createServer(app);
@@ -133,6 +134,8 @@ app.use('/milestone',    milestoneRoutes);
 app.use('/subscription', subscriptionRoutes);
 app.use('/chat',         chatRoutes);
 app.use('/payment',      paymentRoutes);
+// Admin routes
+app.use('/admin', adminRoutes);
 
 // connect to Mongo & start server
 const PORT = process.env.PORT || 5000;

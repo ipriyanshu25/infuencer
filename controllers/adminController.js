@@ -1,6 +1,7 @@
 // controllers/adminController.js
 const jwt = require('jsonwebtoken');
 const Admin = require('../models/admin');
+const Brand = require('../models/brand'); // Assuming you have a Brand model
 
 /**
  * POST /admin/login
@@ -27,4 +28,54 @@ exports.login = async (req, res) => {
     token,
     admin: { adminId: admin.adminId, email: admin.email }
   });
+};
+
+
+exports.getAllBrands = async (req, res) => {
+  try {
+    // 1) Pull pagination, search & sort params from the body
+    const page      = Math.max(parseInt(req.body.page, 10)  || 1,  1);
+    const limit     = Math.min(Math.max(parseInt(req.body.limit, 10) || 10, 1), 100);
+    const search    = (req.body.search || '').trim();
+    const sortBy    = req.body.sortBy    || 'name';
+    const sortOrder = (req.body.sortOrder || 'asc').toLowerCase();
+
+    // 2) Build filter
+    const filter = {};
+    if (search) {
+      const re = new RegExp(search, 'i');
+      filter.$or = [{ name: re }, { email: re }];
+    }
+
+    // 3) Count total for meta
+    const total = await Brand.countDocuments(filter);
+
+    // 4) Validate sort inputs & build sort object
+    const ALLOWED_SORT_FIELDS = ['name', 'email', 'createdAt'];
+    const sortField = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : 'name';
+    const direction = sortOrder === 'desc' ? -1 : 1;
+    const sortObj = { [sortField]: direction };
+
+    // 5) Fetch the page with dynamic sort
+    const brands = await Brand.find(filter)
+      .select('-password -_id -__v')
+      .sort(sortObj)
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    // 6) Return structured response
+    return res.status(200).json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      sortBy: sortField,
+      sortOrder: direction === 1 ? 'asc' : 'desc',
+      brands
+    });
+  } catch (error) {
+    console.error('Error in getAllBrands:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
 };

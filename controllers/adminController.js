@@ -4,6 +4,7 @@ const Admin = require('../models/admin');
 const Brand = require('../models/brand'); // Assuming you have a Brand model
 const Influencer = require('../models/influencer'); // Assuming you have an Influencer model
 const Campaign = require('../models/campaign');
+const Milestone = require('../models/milestone'); // Assuming you have a Milestone model
 /**
  * POST /admin/login
  * body: { email, password }

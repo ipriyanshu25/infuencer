@@ -192,3 +192,52 @@ exports.getById = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+exports.getCampaignsByInfluencer = async (req, res) => {
+  try {
+    const {
+      influencerId,
+      page    = 1,
+      limit   = 10,
+      search  = '',
+      sortBy    = 'createdAt',
+      sortOrder = 'desc'    // 'asc' or 'desc'
+    } = req.body;
+
+    if (!influencerId) {
+      return res.status(400).json({ message: 'influencerId is required' });
+    }
+
+    // Build filter
+    const filter = { influencerId };
+    if (search.trim()) {
+      filter.$or = [
+        { name:        { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const skip = (Math.max(page,1) - 1) * Math.max(limit,1);
+    const sortDirection = sortOrder === 'asc' ? 1 : -1;
+
+    // Total count for pagination
+    const total = await Campaign.countDocuments(filter);
+
+    // Fetch paged, sorted campaigns
+    const campaigns = await Campaign.find(filter)
+      .sort({ [sortBy]: sortDirection })
+      .skip(skip)
+      .limit(limit);
+
+    return res.status(200).json({
+      total,
+      page:      Number(page),
+      pages:     Math.ceil(total / limit),
+      campaigns
+    });
+  } catch (error) {
+    console.error('Error in getCampaignsByInfluencer:', error);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};

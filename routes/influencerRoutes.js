@@ -7,12 +7,13 @@ const {
   verifyToken,
   getList,
   getById,
-  getActiveCampaignsByCategory
+getCampaignsByInfluencer
 } = require('../controllers/influencerController');
 
 // Public endpoints:
 router.post('/register', register);
 router.post('/login',    login);
+router.post('/get-campaign',getCampaignsByInfluencer);
 router.post('/getlist',verifyToken,getList);
 router.get('/getById', verifyToken,getById);
 

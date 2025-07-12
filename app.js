@@ -1,29 +1,30 @@
 // app.js
 require('dotenv').config();
 
-const express    = require('express');
-const cors       = require('cors');
-const mongoose   = require('mongoose');
-const http       = require('http');
-const WebSocket  = require('ws');
+const express = require('express');
+const cors = require('cors');
+const mongoose = require('mongoose');
+const http = require('http');
+const WebSocket = require('ws');
 const { v4: uuidv4 } = require('uuid');
 
 // your existing routes
-const influencerRoutes    = require('./routes/influencerRoutes');
-const countryRoutes       = require('./routes/countryRoutes');
-const brandRoutes         = require('./routes/brandRoutes');
-const campaignRoutes      = require('./routes/campaignRoutes');
-const interestRoutes      = require('./routes/interestRoutes');
-const audienceRoutes      = require('./routes/audienceRoutes');
+const influencerRoutes = require('./routes/influencerRoutes');
+const countryRoutes = require('./routes/countryRoutes');
+const brandRoutes = require('./routes/brandRoutes');
+const campaignRoutes = require('./routes/campaignRoutes');
+const interestRoutes = require('./routes/interestRoutes');
+const audienceRoutes = require('./routes/audienceRoutes');
 const applyCampaingRoutes = require('./routes/applyCampaingRoutes');
-const contractRoutes      = require('./routes/contractRoutes');
-const milestoneRoutes     = require('./routes/milestoneRoutes');
-const subscriptionRoutes  = require('./routes/subscriptionRoutes');
-const paymentRoutes       = require('./routes/paymentRoutes');
-const chatRoutes          = require('./routes/chatRoutes');
-const adminRoutes         = require('./routes/adminRoutes'); // Assuming you have this route
+const contractRoutes = require('./routes/contractRoutes');
+const milestoneRoutes = require('./routes/milestoneRoutes');
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
+const chatRoutes = require('./routes/chatRoutes');
+const adminRoutes = require('./routes/adminRoutes'); // Assuming you have this route
+const policy = require('./routes/policyRoutes')
 
-const app    = express();
+const app = express();
 const server = http.createServer(app);
 
 // --- WebSocket setup using 'ws' ---
@@ -115,27 +116,28 @@ wss.on('connection', (ws, req) => {
 
 // CORS + body parsers
 app.use(cors({
-  origin:      process.env.FRONTEND_ORIGIN || 'http://localhost:3000',
+  origin: process.env.FRONTEND_ORIGIN || 'http://localhost:3000',
   credentials: true
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // REST routes
-app.use('/influencer',   influencerRoutes);
-app.use('/country',      countryRoutes);
-app.use('/brand',        brandRoutes);
-app.use('/campaign',     campaignRoutes);
-app.use('/interest',     interestRoutes);
-app.use('/audience',     audienceRoutes);
-app.use('/apply',        applyCampaingRoutes);
-app.use('/contract',     contractRoutes);
-app.use('/milestone',    milestoneRoutes);
+app.use('/influencer', influencerRoutes);
+app.use('/country', countryRoutes);
+app.use('/brand', brandRoutes);
+app.use('/campaign', campaignRoutes);
+app.use('/interest', interestRoutes);
+app.use('/audience', audienceRoutes);
+app.use('/apply', applyCampaingRoutes);
+app.use('/contract', contractRoutes);
+app.use('/milestone', milestoneRoutes);
 app.use('/subscription', subscriptionRoutes);
-app.use('/chat',         chatRoutes);
-app.use('/payment',      paymentRoutes);
+app.use('/chat', chatRoutes);
+app.use('/payment', paymentRoutes);
 // Admin routes
 app.use('/admin', adminRoutes);
+app.use('/policy',policy);
 
 // connect to Mongo & start server
 const PORT = process.env.PORT || 5000;

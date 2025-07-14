@@ -22,7 +22,9 @@ const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const adminRoutes = require('./routes/adminRoutes'); // Assuming you have this route
-const policy = require('./routes/policyRoutes')
+const policy = require('./routes/policyRoutes');
+const contact = require('./routes/contactRoutes');
+const faqs = require('./routes/faqsRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -138,6 +140,8 @@ app.use('/payment', paymentRoutes);
 // Admin routes
 app.use('/admin', adminRoutes);
 app.use('/policy',policy);
+app.use('/contact',contact);
+app.use('/faqs',faqs);
 
 // connect to Mongo & start server
 const PORT = process.env.PORT || 5000;

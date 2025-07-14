@@ -13,7 +13,7 @@ router.post('/getList', contactController.getAllContacts);
 router.post('/newsletter/create', contactController.createNewsletter);
 router.post('/newsletter/list',   contactController.getNewsletterList);
 // Newsletter download endpoints
-router.get('/newsletter/download',   contactController.downloadNewsletter);
+router.post('/newsletter/download',   contactController.downloadNewsletter);
 
 
 module.exports = router;

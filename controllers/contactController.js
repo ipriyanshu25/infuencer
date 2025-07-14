@@ -3,6 +3,8 @@
 require('dotenv').config();
 const Contact    = require('../models/contactUs');
 const NewsLetter  = require('../models/newsletter');
+const { Parser } = require('json2csv');
+const ExcelJS    = require('exceljs');
 const nodemailer = require('nodemailer');
 
 exports.sendContact = async (req, res) => {
@@ -100,10 +102,63 @@ exports.getNewsletterList = async (req, res) => {
   try {
     const list = await NewsLetter.find()
       .sort({ createdAt: -1 })
-      .select('email createdAt -_id');
+      .select('email createdAt');
     return res.status(200).json({ subscribers: list });
   } catch (err) {
     console.error('getNewsletterList error:', err);
     return res.status(500).json({ error: 'Server error' });
+  }
+};
+
+exports.downloadNewsletter = async (req, res) => {
+  try {
+    const { type } = req.body;
+    if (!type || !['csv', 'excel'].includes(type)) {
+      return res.status(400).json({ error: 'Invalid or missing type; must be "csv" or "excel"' });
+    }
+
+    // fetch subscribers
+    const list = await NewsLetter.find()
+      .sort({ createdAt: -1 })
+      .select('email createdAt -_id')
+      .lean();
+
+    if (type === 'csv') {
+      // generate CSV
+      const fields = ['email', 'createdAt'];
+      const parser = new Parser({ fields, quote: '"' });
+      const csv    = parser.parse(list);
+
+      res.header('Content-Type', 'text/csv');
+      res.attachment('newsletter_emails.csv');
+      return res.send(csv);
+    } else {
+      // generate Excel
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Subscribers');
+
+      ws.columns = [
+        { header: 'Email',        key: 'email',      width: 30 },
+        { header: 'Subscribed At', key: 'createdAt', width: 25 }
+      ];
+
+      list.forEach(item => {
+        ws.addRow({
+          email:     item.email,
+          createdAt: item.createdAt.toISOString()
+        });
+      });
+
+      const buf = await wb.xlsx.writeBuffer();
+      res.header(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.attachment('newsletter_emails.xlsx');
+      return res.send(buf);
+    }
+  } catch (err) {
+    console.error('downloadNewsletter error:', err);
+    return res.status(500).json({ error: 'Could not generate download' });
   }
 };

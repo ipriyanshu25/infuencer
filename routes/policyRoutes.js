@@ -8,6 +8,6 @@ const policyController = require('../controllers/policyController');
 router.post('/create', policyController.createPolicy);
 router.post('/update', policyController.updatePolicy);
 router.post('/delete', policyController.deletePolicy);
-router.post('/get',    policyController.getPolicy);
+router.post('/getlist', policyController.getPolicy);
 
 module.exports = router;

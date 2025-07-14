@@ -5,16 +5,16 @@ const Policy = require('../models/policy');
 /**
  * Create a new policy
  * POST /api/policy/create
- * Body: { policyName, effectiveDate, sections }
+ * Body: { policyType, effectiveDate, content }
  */
 exports.createPolicy = async (req, res) => {
   try {
-    const { policyName, effectiveDate, sections } = req.body;
-    const existing = await Policy.findOne({ policyName });
+    const { policyType, effectiveDate, content } = req.body;
+    const existing = await Policy.findOne({ policyType });
     if (existing) {
-      return res.status(400).json({ error: 'policyName already exists' });
+      return res.status(400).json({ error: 'Policy type already exists' });
     }
-    const policy = new Policy({ policyName, effectiveDate, sections });
+    const policy = new Policy({ policyType, effectiveDate, content });
     await policy.save();
     return res.status(201).json(policy);
   } catch (err) {
@@ -26,16 +26,16 @@ exports.createPolicy = async (req, res) => {
 /**
  * Update an existing policy
  * POST /api/policy/update
- * Body: { policyName, effectiveDate?, sections? }
+ * Body: { policyType, effectiveDate?, content? }
  */
 exports.updatePolicy = async (req, res) => {
   try {
-    const { policyName, effectiveDate, sections } = req.body;
+    const { policyType, effectiveDate, content } = req.body;
     const update = {};
     if (effectiveDate) update.effectiveDate = effectiveDate;
-    if (sections)      update.sections = sections;
+    if (content) update.content = content;
     const policy = await Policy.findOneAndUpdate(
-      { policyName },
+      { policyType },
       { $set: update },
       { new: true }
     );
@@ -52,12 +52,12 @@ exports.updatePolicy = async (req, res) => {
 /**
  * Delete a policy
  * POST /api/policy/delete
- * Body: { policyName }
+ * Body: { policyType }
  */
 exports.deletePolicy = async (req, res) => {
   try {
-    const { policyName } = req.body;
-    const result = await Policy.findOneAndDelete({ policyName });
+    const { policyType } = req.body;
+    const result = await Policy.findOneAndDelete({ policyType });
     if (!result) {
       return res.status(404).json({ error: 'Policy not found' });
     }
@@ -68,11 +68,15 @@ exports.deletePolicy = async (req, res) => {
   }
 };
 
-
+/**
+ * Retrieve a policy
+ * POST /api/policy/get
+ * Body: { policyType }
+ */
 exports.getPolicy = async (req, res) => {
   try {
-    const { policyName } = req.body;
-    const policy = await Policy.findOne({ policyName });
+    const { policyType } = req.body;
+    const policy = await Policy.findOne({ policyType });
     if (!policy) {
       return res.status(404).json({ error: 'Policy not found' });
     }

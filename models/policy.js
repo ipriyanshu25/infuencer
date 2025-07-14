@@ -1,30 +1,38 @@
-// models/Policy.js
+const mongoose = require('mongoose');
+const { v4: uuidv4 } = require('uuid');
 
-const mongoose = require("mongoose");
-const { Schema } = mongoose;
-const { v4: uuidv4 } = require("uuid");
-
-const SectionSchema = new Schema({
-  id: {
+const policySchema = new mongoose.Schema({
+  policyId: {
     type: String,
-    default: uuidv4,      // auto-generate a unique UUID v4
+    default: uuidv4,
+    unique: true
+  },
+  policyType: {
+    type: String,
+    enum: [
+      'Terms of Service',
+      'Privacy Policy',
+      'Returns Policy',
+      'Shipping & Delivery',
+      'Cookie Policy'
+    ],
+    required: true,
+    unique: true
+  },
+  effectiveDate: {
+    type: Date,
     required: true
   },
-  title:   { type: String, required: true },
-  content: { type: String, required: true }  // plain text only
-}, { _id: false });
-
-const PolicySchema = new Schema({
-  policyName:    { type: String, required: true, unique: true },
-  effectiveDate: { type: Date,   required: true },
-  updatedAt:     { type: Date,   required: true, default: Date.now },
-  sections:      { type: [SectionSchema], default: [] }
+  updatedDate: {
+    type: Date,
+    default: Date.now
+  },
+  content: {
+    type: String,
+    required: true
+  }
 });
 
-// refresh `updatedAt` on each save
-PolicySchema.pre("save", function(next) {
-  this.updatedAt = new Date();
-  next();
-});
+const Policy = mongoose.models.Policy || mongoose.model('Policy', policySchema);
 
-module.exports = mongoose.model("Policy", PolicySchema);
+module.exports = Policy;

@@ -10,4 +10,8 @@ router.post('/send', contactController.sendContact);
 router.post('/getList', contactController.getAllContacts);
 
 
+router.post('/newsletter/create', contactController.createNewsletter);
+router.post('/newsletter/list',   contactController.getNewsletterList);
+
+
 module.exports = router;

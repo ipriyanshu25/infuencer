@@ -2,6 +2,7 @@
 
 require('dotenv').config();
 const Contact    = require('../models/contactUs');
+const NewsLetter  = require('../models/newsletter');
 const nodemailer = require('nodemailer');
 
 exports.sendContact = async (req, res) => {
@@ -62,6 +63,47 @@ exports.getAllContacts = async (req, res) => {
     return res.status(200).json(contacts);
   } catch (err) {
     console.error('getAllContacts error', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+};
+
+
+exports.createNewsletter = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // optional: prevent duplicates
+    const exists = await NewsLetter.findOne({ email });
+    if (exists) {
+      return res.status(409).json({ error: 'Email already subscribed' });
+    }
+
+    const subscriber = await new NewsLetter({ email }).save();
+    return res.status(201).json({
+      message: 'Subscribed successfully',
+      subscriber
+    });
+  } catch (err) {
+    console.error('createNewsletter error:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+};
+
+/**
+ * Get list of all newsletter emails
+ * POST /api/newsletter/list
+ */
+exports.getNewsletterList = async (req, res) => {
+  try {
+    const list = await NewsLetter.find()
+      .sort({ createdAt: -1 })
+      .select('email createdAt -_id');
+    return res.status(200).json({ subscribers: list });
+  } catch (err) {
+    console.error('getNewsletterList error:', err);
     return res.status(500).json({ error: 'Server error' });
   }
 };

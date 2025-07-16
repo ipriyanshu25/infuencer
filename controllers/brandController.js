@@ -1,73 +1,146 @@
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 const Brand = require('../models/brand');
 const Country = require('../models/country');
 const Milestone = require('../models/milestone');
 const Subscription = require('../models/subscription'); // <-- your plan model
 const subscriptionHelper = require('../utils/subscriptionHelper');
+
+
+const SMTP_HOST = process.env.SMTP_HOST;
+const SMTP_PORT = parseInt(process.env.SMTP_PORT, 10);
+const SMTP_USER = process.env.SMTP_USER;
+const SMTP_PASS = process.env.SMTP_PASS;
 const JWT_SECRET = process.env.JWT_SECRET;
 
+const transporter = nodemailer.createTransport({
+  host: SMTP_HOST,
+  port: SMTP_PORT,
+  secure: SMTP_PORT === 465,
+  auth: { user: SMTP_USER, pass: SMTP_PASS }
+});
 
+// 1) Request OTP
+exports.requestOtp = async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: 'Email is required' });
+
+  // generate code & expiry
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+  // upsert brand record’s OTP fields
+  const brand = await Brand.findOneAndUpdate(
+    { email },
+    { otpCode: code, otpExpiresAt: expiresAt, otpVerified: false },
+    { new: true }
+  );
+  if (!brand) {
+    // if no brand yet, create a temp record with email only
+    await new Brand({ email, otpCode: code, otpExpiresAt: expiresAt }).save();
+  }
+
+  // send OTP email
+  await transporter.sendMail({
+    from: `"No-Reply" <${SMTP_USER}>`,
+    to: email,
+    subject: 'Your verification code',
+    text: `Your OTP is ${code}. It expires in 10 minutes.`
+  });
+
+  res.json({ message: 'OTP sent to email' });
+};
+
+// 2) Verify OTP
+exports.verifyOtp = async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || otp == null) {
+    return res.status(400).json({ message: 'Email and otp required' });
+  }
+
+  // atomically check code + expiry
+  const result = await Brand.findOneAndUpdate(
+    {
+      email,
+      otpCode: otp.toString().trim(),
+      otpExpiresAt: { $gt: new Date() }
+    },
+    {
+      $set: { 
+        otpVerified: true,
+        // optionally clear the code so it can’t be reused:
+        otpCode: undefined,
+        otpExpiresAt: undefined
+      }
+    },
+    { new: true, runValidators: false }
+  );
+
+  if (!result) {
+    return res.status(400).json({ message: 'Invalid or expired OTP' });
+  }
+
+  return res.json({ message: 'OTP verified' });
+};
+
+// 3) Complete registration
 exports.register = async (req, res) => {
   const { name, email, password, phone, countryId, callingId } = req.body;
-  try {
-    // 1) Check email uniqueness
-    if (await Brand.exists({ email })) {
-      return res.status(400).json({ message: 'Brand already exists' });
-    }
+  if (!name || !email || !password || !phone || !countryId || !callingId) {
+    return res.status(400).json({ message: 'All fields are required' });
+  }
 
-    // 2) Validate country & calling code
-    const countryDoc = await Country.findById(countryId);
-    const callingDoc = await Country.findById(callingId);
-    if (!countryDoc || !callingDoc) {
-      return res.status(400).json({ message: 'Invalid country or calling code ID' });
-    }
+  // fetch brand (must have otpVerified)
+  const brand = await Brand.findOne({ email });
+  if (!brand || !brand.otpVerified) {
+    return res.status(400).json({ message: 'Email not verified' });
+  }
+  if (brand.name) {
+    return res.status(400).json({ message: 'Brand already registered' });
+  }
 
-    // 3) Create brand (subscription sub-doc gets defaults)
-    const newBrand = new Brand({
-      name,
-      email,
-      password, // will be hashed by pre-save hook
-      phone,
-      county: countryDoc.countryName,
-      callingcode: callingDoc.callingCode,
-      countryId,
-      callingId
-    });
+  // validate country IDs
+  const countryDoc = await Country.findById(countryId);
+  const callingDoc = await Country.findById(callingId);
+  if (!countryDoc || !callingDoc) {
+    return res.status(400).json({ message: 'Invalid country or calling code' });
+  }
 
-    // 4) Initial save to get subscription defaults
-    let savedBrand = await newBrand.save();
+  // fill in the rest of fields
+  brand.name        = name;
+  brand.password    = password;
+  brand.phone       = phone;
+  brand.county      = countryDoc.countryName;
+  brand.callingcode = callingDoc.callingCode;
+  brand.countryId   = countryId;
+  brand.callingId   = callingId;
 
-    // 5) Assign default free/baseline plan
-    const freePlan = await subscriptionHelper.getFreePlan('Brand');
-    if (freePlan) {
-      const expires = subscriptionHelper.computeExpiry(freePlan);
-      const featuresSnapshot = freePlan.features.map(f => ({
+  // assign subscription
+  const freePlan = await subscriptionHelper.getFreePlan('Brand');
+  if (freePlan) {
+    const expires = subscriptionHelper.computeExpiry(freePlan);
+    brand.subscription = {
+      planId:    freePlan.planId,
+      planName:  freePlan.name,
+      startedAt: new Date(),
+      expiresAt: expires,
+      features:  freePlan.features.map(f => ({
         key:   f.key,
         limit: typeof f.value === 'number' ? f.value : 0,
         used:  0
-      }));
-
-      savedBrand.subscription = {
-        planId:    freePlan.planId,
-        planName:  freePlan.name,
-        startedAt: new Date(),
-        expiresAt: expires,
-        features:  featuresSnapshot
-      };
-      savedBrand.subscriptionExpired = false;
-      await savedBrand.save();
-    }
-
-    // 6) Respond
-    return res.status(201).json({
-      message: 'Brand registered successfully',
-      brand:   savedBrand
-    });
-  } catch (error) {
-    console.error('Error in register:', error);
-    return res.status(500).json({ message: 'Internal server error' });
+      }))
+    };
+    brand.subscriptionExpired = false;
   }
+
+  // clear OTP fields
+  brand.otpCode      = undefined;
+  brand.otpExpiresAt = undefined;
+  brand.otpVerified  = true;  // keep as proof
+
+  const saved = await brand.save();
+  res.status(201).json({ message: 'Registration complete', brand: saved });
 };
 
 

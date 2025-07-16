@@ -1,107 +1,169 @@
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const mongoose = require('mongoose');
-const Influencer = require('../models/influencer');
-const Country = require('../models/country');
-const Interest = require('../models/interest');
-const Campaign = require('../models/campaign'); 
-const AudienceRange = require('../models/audience');
-const subscriptionHelper = require('../utils/subscriptionHelper');
-const JWT_SECRET = process.env.JWT_SECRET;
+// controllers/influencerController.js
+require('dotenv').config();
+const jwt        = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
+const mongoose   = require('mongoose');
 
-// Register a new influencer
-exports.register = async (req, res) => {
+const Influencer        = require('../models/influencer');
+const Interest          = require('../models/interest');
+const AudienceRange     = require('../models/audience');
+const Country           = require('../models/country');
+const subscriptionHelper= require('../utils/subscriptionHelper');
+
+const SMTP_HOST = process.env.SMTP_HOST;
+const SMTP_PORT = parseInt(process.env.SMTP_PORT, 10);
+const SMTP_USER = process.env.SMTP_USER;
+const SMTP_PASS = process.env.SMTP_PASS;
+const JWT_SECRET= process.env.JWT_SECRET;
+
+const transporter = nodemailer.createTransport({
+  host: SMTP_HOST,
+  port: SMTP_PORT,
+  secure: SMTP_PORT === 465,
+  auth: { user: SMTP_USER, pass: SMTP_PASS }
+});
+
+/**
+ * STEP 1: Request OTP
+ * POST /influencer/request-otp
+ * Body: { email }
+ */
+exports.requestOtpInfluencer = async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: 'Email is required' });
+
+  const code      = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+  // upsert so we can save an email-only doc first
+  await Influencer.findOneAndUpdate(
+    { email },
+    {
+      $set: {
+        otpCode:      code,
+        otpExpiresAt: expiresAt,
+        otpVerified:  false
+      }
+    },
+    { upsert: true, new: true }
+  );
+
+  await transporter.sendMail({
+    from:    `"No-Reply" <${SMTP_USER}>`,
+    to:      email,
+    subject: 'Verify Influencer',
+    text:    `Your verification code is ${code}. It expires in 10 minutes.`
+  });
+
+  res.json({ message: 'OTP sent to email' });
+};
+
+
+/**
+ * STEP 2: Verify OTP
+ * POST /influencer/verify-otp
+ * Body: { email, otp }
+ */
+exports.verifyOtpInfluencer = async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || otp == null) {
+    return res.status(400).json({ message: 'Email and otp required' });
+  }
+
+  // atomically match and set verified, skipping full validation
+  const updated = await Influencer.findOneAndUpdate(
+    {
+      email,
+      otpCode: otp.toString().trim(),
+      otpExpiresAt: { $gt: new Date() }
+    },
+    {
+      $set: { otpVerified: true },
+      $unset: { otpCode: "", otpExpiresAt: "" }
+    },
+    { new: true, runValidators: false }
+  );
+
+  if (!updated) {
+    return res.status(400).json({ message: 'Invalid or expired OTP' });
+  }
+
+  res.json({ message: 'Email verified — you may now complete registration' });
+};
+
+/**
+ * STEP 3: Complete registration
+ * POST /influencer/register
+ * Body: { name, email, password, phone, socialMedia, categoryId, audienceId, countryId, callingId, bio }
+ */
+exports.registerInfluencer = async (req, res) => {
   const {
-    name,
-    email,
-    password,
-    phone,
-    socialMedia,
-    categoryId,
-    audienceId,
-    countryId,
-    callingId,
-    bio
+    name, email, password, phone,
+    socialMedia, categoryId, audienceId,
+    countryId, callingId, bio
   } = req.body;
 
-  try {
-    // 1. Check if influencer already exists
-    if (await Influencer.findOne({ email })) {
-      return res.status(400).json({ message: 'Influencer already exists' });
-    }
+  // 1) Check OTP
+  const inf = await Influencer.findOne({ email });
+  if (!inf || !inf.otpVerified) {
+    return res.status(400).json({ message: 'Email not verified' });
+  }
+  if (inf.name) {
+    return res.status(400).json({ message: 'Already registered' });
+  }
 
-    // 2. Look up and validate all referenced docs
-    const [interestDoc, audienceDoc, countryDoc, callingDoc] = await Promise.all([
-      Interest.findById(categoryId),
-      AudienceRange.findById(audienceId),
-      Country.findById(countryId),
-      Country.findById(callingId)
-    ]);
+  // 2) Validate refs
+  const [interestDoc, audienceDoc, countryDoc, callingDoc] = await Promise.all([
+    Interest.findById(categoryId),
+    AudienceRange.findById(audienceId),
+    Country.findById(countryId),
+    Country.findById(callingId)
+  ]);
+  if (!interestDoc || !audienceDoc || !countryDoc || !callingDoc) {
+    return res.status(400).json({ message: 'Invalid reference IDs' });
+  }
 
-    if (!interestDoc) return res.status(400).json({ message: 'Invalid interest/category ID' });
-    if (!audienceDoc) return res.status(400).json({ message: 'Invalid audience range ID' });
-    if (!countryDoc) return res.status(400).json({ message: 'Invalid country ID' });
-    if (!callingDoc) return res.status(400).json({ message: 'Invalid calling code ID' });
+  // 3) Fill in fields
+  inf.name         = name;
+  inf.password     = password;
+  inf.phone        = phone;
+  inf.socialMedia  = socialMedia;
+  inf.categoryId   = categoryId;
+  inf.categoryName = interestDoc.name;
+  inf.audienceId   = audienceId;
+  inf.audienceRange= audienceDoc.range;
+  inf.countryId    = countryId;
+  inf.county       = countryDoc.countryName;
+  inf.callingId    = callingId;
+  inf.callingcode  = callingDoc.callingCode;
+  inf.bio          = bio;
 
-    // 3. Derive human-readable fields
-    const categoryName  = interestDoc.name;
-    const audienceRange = audienceDoc.range;
-    const countryName   = countryDoc.countryName;
-    const callingCode   = callingDoc.callingCode;
-
-    // 4. Create and save influencer
-    const newInfluencer = new Influencer({
-      name,
-      email,
-      password,
-      phone,
-      socialMedia,
-      categoryId,
-      categoryName,
-      audienceId,
-      audienceRange,
-      countryId,
-      county: countryName,
-      callingId,
-      callingcode: callingCode,
-      bio
-    });
-
-    // Initial save to get base document and default subscription
-    let savedInfluencer = await newInfluencer.save();
-
-    // 5. Assign default free subscription
-    const freePlan = await subscriptionHelper.getFreePlan('Influencer');
-    if (freePlan) {
-      const expires = subscriptionHelper.computeExpiry(freePlan);
-      const featuresSnapshot = freePlan.features.map(f => ({
+  // 4) Assign free plan
+  const freePlan = await subscriptionHelper.getFreePlan('Influencer');
+  if (freePlan) {
+    const expires = subscriptionHelper.computeExpiry(freePlan);
+    inf.subscription = {
+      planId:    freePlan.planId,
+      planName:  freePlan.name,
+      startedAt: new Date(),
+      expiresAt: expires,
+      features:  freePlan.features.map(f => ({
         key:   f.key,
         limit: typeof f.value === 'number' ? f.value : 0,
         used:  0
-      }));
-
-      savedInfluencer.subscription = {
-        planId:    freePlan.planId,
-        planName:  freePlan.name,
-        startedAt: new Date(),
-        expiresAt: expires,
-        features:  featuresSnapshot
-      };
-      savedInfluencer.subscriptionExpired = false;
-      await savedInfluencer.save();
-    }
-
-    // 6. Respond with created influencer
-    return res.status(201).json({
-      message: 'Influencer registered successfully',
-      influencerId: savedInfluencer.influencerId,
-      subscription: savedInfluencer.subscription
-    });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Internal server error' });
+      }))
+    };
+    inf.subscriptionExpired = false;
   }
+
+  await inf.save();  // now all required fields are present
+  return res.status(201).json({
+    message:      'Influencer registered successfully',
+    influencerId: inf.influencerId,
+    subscription: inf.subscription
+  });
 };
+
 
 // Login an influencer
 exports.login = async (req, res) => {

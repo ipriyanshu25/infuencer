@@ -25,6 +25,7 @@ const adminRoutes = require('./routes/adminRoutes'); // Assuming you have this r
 const policy = require('./routes/policyRoutes');
 const contact = require('./routes/contactRoutes');
 const faqs = require('./routes/faqsRoutes');
+const dashboard = require('./routes/dashboardRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -142,6 +143,7 @@ app.use('/admin', adminRoutes);
 app.use('/policy',policy);
 app.use('/contact',contact);
 app.use('/faqs',faqs);
+app.use('/dash',dashboard);
 
 // connect to Mongo & start server
 const PORT = process.env.PORT || 5000;

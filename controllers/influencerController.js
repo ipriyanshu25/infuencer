@@ -303,3 +303,128 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+
+
+exports.requestPasswordResetOtpInfluencer = async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: 'Email is required' });
+
+  // Find registered influencer (must have completed registration & password)
+  const influencer = await Influencer.findOne({
+    email: { $regex: `^${email.trim()}$`, $options: 'i' },
+    name: { $exists: true, $ne: null },
+    password: { $exists: true, $ne: null }
+  });
+
+  // Always respond generic (don’t leak whether account exists)
+  if (!influencer) {
+    return res.status(200).json({
+      message: 'If an account with that email exists, an OTP has been sent.'
+    });
+  }
+
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+
+  influencer.passwordResetCode = code;
+  influencer.passwordResetExpiresAt = expiresAt;
+  influencer.passwordResetVerified = false;
+  await influencer.save();
+
+  await transporter.sendMail({
+    from: `"No-Reply" <${SMTP_USER}>`,
+    to: influencer.email,
+    subject: 'Password reset code',
+    text: `Your password reset OTP is ${code}. It expires in 10 minutes.`
+  });
+
+  return res.status(200).json({
+    message: 'If an account with that email exists, an OTP has been sent.'
+  });
+};
+
+
+/**
+ * STEP B: Verify password reset OTP
+ * POST /influencer/password/reset/verify
+ * Body: { email, otp }
+ *
+ * On success returns a short-lived resetToken (JWT, ~15m).
+ */
+exports.verifyPasswordResetOtpInfluencer = async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || otp == null) {
+    return res.status(400).json({ message: 'Email and otp required' });
+  }
+
+  const influencer = await Influencer.findOne({
+    email: { $regex: `^${email.trim()}$`, $options: 'i' },
+    passwordResetCode: otp.toString().trim(),
+    passwordResetExpiresAt: { $gt: new Date() }
+  });
+
+  if (!influencer) {
+    return res.status(400).json({ message: 'Invalid or expired OTP' });
+  }
+
+  influencer.passwordResetVerified = true;
+  // Clear the OTP so it cannot be reused
+  influencer.passwordResetCode = undefined;
+  influencer.passwordResetExpiresAt = undefined;
+  await influencer.save();
+
+  // Short-lived JWT authorizing password reset
+  const resetToken = jwt.sign(
+    { influencerId: influencer.influencerId, email: influencer.email, prt: true },
+    JWT_SECRET,
+    { expiresIn: '15m' }
+  );
+
+  return res.status(200).json({ message: 'OTP verified', resetToken });
+};
+
+
+/**
+ * STEP C: Complete password reset
+ * POST /influencer/password/reset/complete
+ * Body: { resetToken, newPassword, confirmPassword? }
+ *
+ * Requires token from STEP B. Updates password (hashed via schema hook).
+ */
+exports.resetPasswordInfluencer = async (req, res) => {
+  const { resetToken, newPassword, confirmPassword } = req.body;
+  if (!resetToken || !newPassword) {
+    return res.status(400).json({ message: 'resetToken and newPassword required' });
+  }
+  if (confirmPassword != null && confirmPassword !== newPassword) {
+    return res.status(400).json({ message: 'Passwords do not match' });
+  }
+
+  try {
+    const decoded = jwt.verify(resetToken, JWT_SECRET);
+    if (!decoded.prt) {
+      return res.status(403).json({ message: 'Invalid reset token' });
+    }
+
+    const influencer = await Influencer.findOne({ influencerId: decoded.influencerId });
+    if (!influencer) {
+      return res.status(404).json({ message: 'Influencer not found' });
+    }
+
+    // Defense in depth: confirm a verified reset happened
+    if (!influencer.passwordResetVerified) {
+      return res.status(400).json({ message: 'Password reset not verified' });
+    }
+
+    influencer.password = newPassword; // hashed via pre-save hook
+    influencer.passwordResetVerified = false; // clear flag
+    await influencer.save();
+
+    return res.status(200).json({ message: 'Password reset successful' });
+  } catch (err) {
+    console.error('Error in resetPasswordInfluencer:', err);
+    return res.status(403).json({ message: 'Invalid or expired reset token' });
+  }
+};

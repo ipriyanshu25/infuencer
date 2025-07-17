@@ -21,5 +21,8 @@ router.post('/get-campaign',getCampaignsByInfluencer);
 router.post('/getlist',verifyToken,getList);
 router.get('/getById', verifyToken,getById);
 
+router.post('/sendOtp',  influencerController.requestPasswordResetOtpInfluencer);
+router.post('/verifyOtp',   influencerController.verifyPasswordResetOtpInfluencer);
+router.post('/updatePassword', influencerController.resetPasswordInfluencer);
 
 module.exports = router;

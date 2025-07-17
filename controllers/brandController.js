@@ -324,6 +324,7 @@ exports.verifyPasswordResetOtp = async (req, res) => {
  * Body: { resetToken, newPassword, confirmPassword? }
  * Requires resetToken from verify step.
  */
+
 exports.resetPassword = async (req, res) => {
   const { resetToken, newPassword, confirmPassword } = req.body;
   if (!resetToken || !newPassword) {

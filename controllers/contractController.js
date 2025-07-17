@@ -3,6 +3,7 @@ const Contract = require('../models/contract');
 const Brand = require('../models/brand');
 const Influencer = require('../models/influencer');
 const Campaign = require('../models/campaign');
+const ApplyCampaign = require('../models/applyCampaign');
 
 exports.sendOrGenerateContract = async (req, res) => {
   try {
@@ -100,10 +101,10 @@ exports.sendOrGenerateContract = async (req, res) => {
     await newContract.save();
 
     // 6) Update ApplyCampaing record so that this influencer is marked approved
-    let appRec = await ApplyCampaing.findOne({ campaignId });
+    let appRec = await ApplyCampaign.findOne({ campaignId });
     if (!appRec) {
       // if no record yet, create one
-      appRec = new ApplyCampaing({
+      appRec = new ApplyCampaign({
         campaignId,
         applicants: [],
         approved:   [{ influencerId, name: influencer.name }]

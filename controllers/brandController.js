@@ -237,3 +237,125 @@ exports.getAllBrands = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+
+exports.requestPasswordResetOtp = async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: 'Email is required' });
+
+  // Find registered brand (must have name + password set)
+  const brand = await Brand.findOne({
+    email: { $regex: `^${email.trim()}$`, $options: 'i' },
+    name: { $exists: true, $ne: null }, // indicates completed registration
+    password: { $exists: true, $ne: null }
+  });
+
+  // Security-choice: respond generic even if not found.
+  if (!brand) {
+    return res
+      .status(200)
+      .json({ message: 'If an account with that email exists, an OTP has been sent.' });
+  }
+
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+
+  brand.passwordResetCode = code;
+  brand.passwordResetExpiresAt = expiresAt;
+  brand.passwordResetVerified = false;
+  await brand.save();
+
+  await transporter.sendMail({
+    from: `"No-Reply" <${SMTP_USER}>`,
+    to: brand.email,
+    subject: 'Password reset code',
+    text: `Your password reset OTP is ${code}. It expires in 10 minutes.`
+  });
+
+  return res
+    .status(200)
+    .json({ message: 'If an account with that email exists, an OTP has been sent.' });
+};
+
+
+/**
+ * POST /brand/password/reset/verify
+ * Body: { email, otp }
+ * Verifies OTP & returns a short-lived reset token.
+ */
+exports.verifyPasswordResetOtp = async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || otp == null) {
+    return res.status(400).json({ message: 'Email and otp required' });
+  }
+
+  const brand = await Brand.findOne({
+    email: { $regex: `^${email.trim()}$`, $options: 'i' },
+    passwordResetCode: otp.toString().trim(),
+    passwordResetExpiresAt: { $gt: new Date() }
+  });
+
+  if (!brand) {
+    return res.status(400).json({ message: 'Invalid or expired OTP' });
+  }
+
+  brand.passwordResetVerified = true;
+  // optional: clear code now to prevent reuse
+  // (if you clear, keep a flag so you know it was verified)
+  // If you prefer to keep until reset completes, comment next two lines.
+  brand.passwordResetCode = undefined;
+  brand.passwordResetExpiresAt = undefined;
+  await brand.save();
+
+  // Issue short-lived JWT authorizing password reset
+  const resetToken = jwt.sign(
+    { brandId: brand.brandId, email: brand.email, prt: true }, // prt=password reset token
+    JWT_SECRET,
+    { expiresIn: '15m' }
+  );
+
+  return res.status(200).json({ message: 'OTP verified', resetToken });
+};
+
+
+/**
+ * POST /brand/password/reset/complete
+ * Body: { resetToken, newPassword, confirmPassword? }
+ * Requires resetToken from verify step.
+ */
+exports.resetPassword = async (req, res) => {
+  const { resetToken, newPassword, confirmPassword } = req.body;
+  if (!resetToken || !newPassword) {
+    return res.status(400).json({ message: 'resetToken and newPassword required' });
+  }
+  if (confirmPassword != null && confirmPassword !== newPassword) {
+    return res.status(400).json({ message: 'Passwords do not match' });
+  }
+
+  try {
+    const decoded = jwt.verify(resetToken, JWT_SECRET);
+    if (!decoded.prt) {
+      return res.status(403).json({ message: 'Invalid reset token' });
+    }
+
+    const brand = await Brand.findOne({ brandId: decoded.brandId });
+    if (!brand) {
+      return res.status(404).json({ message: 'Brand not found' });
+    }
+
+    // optional: ensure passwordResetVerified was true (defense in depth)
+    if (!brand.passwordResetVerified) {
+      return res.status(400).json({ message: 'Password reset not verified' });
+    }
+
+    brand.password = newPassword; // will hash via pre-save hook
+    brand.passwordResetVerified = false; // clear flag
+    await brand.save();
+
+    return res.status(200).json({ message: 'Password reset successful' });
+  } catch (err) {
+    console.error('Error in resetPassword:', err);
+    return res.status(403).json({ message: 'Invalid or expired reset token' });
+  }
+};

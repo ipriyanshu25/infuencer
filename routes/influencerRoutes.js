@@ -9,7 +9,10 @@ const {
   getById,
 getCampaignsByInfluencer,
 requestOtpInfluencer,
-verifyOtpInfluencer
+verifyOtpInfluencer,
+requestPasswordResetOtpInfluencer,
+verifyPasswordResetOtpInfluencer,
+resetPasswordInfluencer
 } = require('../controllers/influencerController');
 
 // Public endpoints:
@@ -21,8 +24,8 @@ router.post('/get-campaign',getCampaignsByInfluencer);
 router.post('/getlist',verifyToken,getList);
 router.get('/getById', verifyToken,getById);
 
-router.post('/sendOtp',  influencerController.requestPasswordResetOtpInfluencer);
-router.post('/verifyOtp',   influencerController.verifyPasswordResetOtpInfluencer);
-router.post('/updatePassword', influencerController.resetPasswordInfluencer);
+router.post('/sendOtp', requestPasswordResetOtpInfluencer);
+router.post('/verifyOtp',   verifyPasswordResetOtpInfluencer);
+router.post('/updatePassword', resetPasswordInfluencer);
 
 module.exports = router;

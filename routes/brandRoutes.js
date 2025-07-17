@@ -9,9 +9,9 @@ router.post('/register', register);
 router.post('/requestOtp',requestOtp);
 router.post('/verifyOtp',verifyOtp);
 
-router.post('/brand/password/reset/request', requestPasswordResetOtp);
-router.post('/brand/password/reset/verify',verifyPasswordResetOtp);
-router.post('/brand/password/reset/complete',resetPassword);
+router.post('/resetotp', requestPasswordResetOtp);
+router.post('/resetVerify',verifyPasswordResetOtp);
+router.post('/updatePassword',resetPassword);
 
 // POST /brand/login → login an existing brand
 router.post('/login', login);

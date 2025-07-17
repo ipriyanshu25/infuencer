@@ -321,7 +321,7 @@ exports.requestPasswordResetOtpInfluencer = async (req, res) => {
   // Always respond generic (don’t leak whether account exists)
   if (!influencer) {
     return res.status(200).json({
-      message: 'If an account with that email exists, an OTP has been sent.'
+      message: 'Email not exist'
     });
   }
 
@@ -341,7 +341,7 @@ exports.requestPasswordResetOtpInfluencer = async (req, res) => {
   });
 
   return res.status(200).json({
-    message: 'If an account with that email exists, an OTP has been sent.'
+    message: 'OTP has been sent.'
   });
 };
 

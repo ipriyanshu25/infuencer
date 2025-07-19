@@ -477,68 +477,89 @@ exports.getPreviousCampaigns = async (req, res) => {
 };
 
 
-exports.getActiveCampaignsByCategory = async (req, res) => {
-  const {
-    categoryId,
-    search,           // single search term
+exports.getActiveCampaignsByCategories = async (req, res) => {
+  let {
+    categoryIds,     // now an array of Interest ObjectId strings
+    search,          // optional search term
     page = 1,
     limit = 10
   } = req.body;
 
-  if (!categoryId) {
-    return res.status(400).json({ message: 'categoryId is required' });
+  // 1) validate categoryIds
+  if (!Array.isArray(categoryIds) || categoryIds.length === 0) {
+    return res.status(400).json({ message: 'You must provide at least one categoryId' });
   }
-  if (!mongoose.Types.ObjectId.isValid(categoryId)) {
-    return res.status(400).json({ message: 'Invalid categoryId' });
-  }
-
-  // Base filter: must belong to this category and be active
-  const filter = {
-    interestId: categoryId,
-    isActive: 1
-  };
-
-
-  if (search && String(search).trim()) {
-    const term = String(search).trim();
-    const orClauses = [
-      { brandName: { $regex: term, $options: 'i' } },
-      { productOrServiceName: { $regex: term, $options: 'i' } }
-    ];
-
-    // if the term is a number, also treat it as a maxBudget
-    const num = Number(term);
-    if (!isNaN(num)) {
-      orClauses.push({ budget: { $lte: num } });
+  // ensure all are valid ObjectId strings
+  for (const c of categoryIds) {
+    if (!mongoose.Types.ObjectId.isValid(c)) {
+      return res.status(400).json({ message: `Invalid categoryId: ${c}` });
     }
   }
 
-  const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
+  // 2) find influencers in any of those categories
+  const influencers = await Influencer
+    .find({ categories: { $in: categoryIds } }, '_id')
+    .lean();
+  const influencerIds = influencers.map(i => i._id);
+  if (influencerIds.length === 0) {
+    // no influencer matches → zero campaigns
+    return res.json({
+      meta: { total: 0, page: Number(page), limit: Number(limit), totalPages: 0 },
+      campaigns: []
+    });
+  }
+
+  // 3) build campaign filter: active + influencerId IN (...)
+  const filter = {
+    influencerId: { $in: influencerIds },
+    isActive:     1
+  };
+
+  // 4) optional search clauses
+  if (search && typeof search === 'string' && search.trim()) {
+    const term = search.trim();
+    const or = [
+      { brandName:            { $regex: term, $options: 'i' } },
+      { productOrServiceName: { $regex: term, $options: 'i' } }
+    ];
+    // also treat numeric terms as budget ceilings
+    const num = Number(term);
+    if (!isNaN(num)) or.push({ budget: { $lte: num } });
+    filter.$or = or;
+  }
+
+  // 5) pagination
+  const pageNum  = Math.max(1, parseInt(page, 10));
+  const limNum   = Math.max(1, parseInt(limit, 10));
+  const skip     = (pageNum - 1) * limNum;
 
   try {
-    const [total, campaigns] = await Promise.all([
+    // 6) fetch total & paged results
+    const [ total, campaigns ] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(Math.max(1, limit))
-        .populate('interestId', 'name')
+        .limit(limNum)
+        .populate('influencerId', 'name influencerId')  // if you want influencer info
     ]);
 
     return res.json({
       meta: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit)
+        page:       pageNum,
+        limit:      limNum,
+        totalPages: Math.ceil(total / limNum)
       },
       campaigns
     });
+
   } catch (err) {
-    console.error('Error fetching campaigns by category:', err);
+    console.error('Error in getActiveCampaignsByCategories:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
 
 exports.checkApplied = async (req, res) => {
   const { campaignId, influencerId } = req.body;

@@ -593,6 +593,7 @@ exports.checkApplied = async (req, res) => {
   }
 };
 
+// controllers/influencerController.js
 exports.getCampaignsByInfluencer = async (req, res) => {
   const { influencerId, search, page = 1, limit = 10 } = req.body;
   if (!influencerId) {
@@ -600,22 +601,32 @@ exports.getCampaignsByInfluencer = async (req, res) => {
   }
 
   try {
-    // 1) Load influencer → get categoryId
-    const inf = await Influencer.findOne({ influencerId }, 'categoryId');
+    // 1) Load influencer → get categories[]
+    const inf = await Influencer.findOne(
+      { influencerId },
+      'categories'
+    ).lean();
     if (!inf) {
       return res.status(404).json({ message: 'Influencer not found' });
     }
-    const categoryId = inf.categoryId;
-    if (!mongoose.Types.ObjectId.isValid(categoryId)) {
-      return res.status(400).json({ message: 'Invalid categoryId on influencer' });
+    const categories = inf.categories || [];
+    if (!categories.length) {
+      return res.json({
+        meta: { total: 0, page: Number(page), limit: Number(limit), totalPages: 0 },
+        campaigns: []
+      });
     }
 
-    // 2) Build campaign filter
-    const filter = { interestId: categoryId, isActive: 1 };
+    // 2) Build campaign filter → interestId in categories, active only
+    const filter = {
+      interestId: { $in: categories },
+      isActive: 1
+    };
+
     if (search?.trim()) {
       const term = search.trim();
       const or = [
-        { brandName: { $regex: term, $options: 'i' } },
+        { brandName:            { $regex: term, $options: 'i' } },
         { productOrServiceName: { $regex: term, $options: 'i' } }
       ];
       const num = Number(term);
@@ -623,42 +634,45 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       filter.$or = or;
     }
 
-    // 3) Fetch total + paginated campaigns
-    const skip = (Math.max(1, page) - 1) * Math.max(1, limit);
-    const [total, campaigns] = await Promise.all([
+    // 3) Pagination
+    const pageNum = Math.max(1, parseInt(page, 10));
+    const limNum  = Math.max(1, parseInt(limit, 10));
+    const skip    = (pageNum - 1) * limNum;
+
+    // 4) Fetch campaigns + total
+    const [ total, campaigns ] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(Math.max(1, limit))
-        .populate('interestId', 'name')
+        .limit(limNum)
         .lean()
     ]);
 
-    // 4) Find all ApplyCampaign records for these campaigns
-    const campaignIds = campaigns.map(c => c.campaignsId);
+    // 5) Gather ApplyCampaign records
+    const campaignIds = campaigns.map(c => c.campaignId);
     const applyRecs = await ApplyCampaign.find({
       campaignId: { $in: campaignIds }
     }).lean();
 
-    // Build applied + approved sets
     const appliedSet = new Set();
     const approvedMap = new Map();
     applyRecs.forEach(r => {
+      // mark if this influencer applied
       if (Array.isArray(r.applicants) &&
-        r.applicants.some(a => a.influencerId === influencerId)) {
+          r.applicants.some(a => a.influencerId === influencerId)) {
         appliedSet.add(r.campaignId);
       }
-      if (Array.isArray(r.approved) && r.approved.length > 0) {
+      // track first approved influencer if any
+      if (Array.isArray(r.approved) && r.approved.length) {
         approvedMap.set(r.campaignId, r.approved[0].influencerId);
       }
     });
 
-    // 5) Find all Contracts for these campaigns by this influencer
-    //    and also pull `isAccepted`
+    // 6) Gather Contract records
     const contractRecs = await Contract.find({
-      campaignId: { $in: campaignIds },
-      influencerId  // only this influencer
+      campaignId:   { $in: campaignIds },
+      influencerId            // only this influencer
     }, 'campaignId contractId isAccepted').lean();
 
     const contractMap = new Map();
@@ -668,36 +682,36 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       acceptedMap.set(c.campaignId, c.isAccepted === 1 ? 1 : 0);
     });
 
-    // 6) Annotate campaigns
+    // 7) Annotate
     const annotated = campaigns.map(c => {
-      const cid = c.campaignsId;
-      const isContracted = contractMap.has(cid) ? 1 : 0;
-      const contractId = contractMap.get(cid) || null;
-      const isAccepted = acceptedMap.get(cid) || 0;
-
+      const cid = c.campaignId;
       return {
         ...c,
-        isContracted,
-        contractId,
-        isAccepted    // ← newly added
+        hasApplied:   appliedSet.has(cid) ? 1 : 0,
+        hasApproved:  approvedMap.has(cid) ? 1 : 0,
+        isContracted: contractMap.has(cid) ? 1 : 0,
+        contractId:   contractMap.get(cid) || null,
+        isAccepted:   acceptedMap.get(cid) || 0
       };
     });
 
-    // 7) Return with meta
+    // 8) Return
     return res.json({
       meta: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit)
+        page:       pageNum,
+        limit:      limNum,
+        totalPages: Math.ceil(total / limNum)
       },
       campaigns: annotated
     });
+
   } catch (err) {
     console.error('Error in getCampaignsByInfluencer:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
 
 exports.getApprovedCampaignsByInfluencer = async (req, res) => {
   const { influencerId, search, page = 1, limit = 10 } = req.body;

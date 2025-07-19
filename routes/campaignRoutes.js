@@ -56,7 +56,7 @@ router.get(
 router.post(
   '/byCategoryId',
   brandController.verifyToken,            // ensure the brand is authenticated
-  campaignController.getActiveCampaignsByCategory
+  campaignController.getActiveCampaignsByCategories
 );
 
 router.post('/checkApplied', brandController.verifyToken, campaignController.checkApplied);

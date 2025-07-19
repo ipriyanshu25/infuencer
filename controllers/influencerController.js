@@ -1,20 +1,27 @@
 // controllers/influencerController.js
 require('dotenv').config();
-const jwt        = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
-const mongoose   = require('mongoose');
+const mongoose = require('mongoose');
+const multer = require('multer');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
 
-const Influencer        = require('../models/influencer');
-const Interest          = require('../models/interest');
-const AudienceRange     = require('../models/audience');
-const Country           = require('../models/country');
-const subscriptionHelper= require('../utils/subscriptionHelper');
+const Influencer = require('../models/influencer');
+const Interest = require('../models/interest');
+const AudienceRange = require('../models/audience');
+const Country = require('../models/country');
+const subscriptionHelper = require('../utils/subscriptionHelper');
+const Platform = require('../models/platform');         // social‐media platforms
+const Audience = require('../models/audienceRange');
+
 
 const SMTP_HOST = process.env.SMTP_HOST;
 const SMTP_PORT = parseInt(process.env.SMTP_PORT, 10);
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
-const JWT_SECRET= process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 const transporter = nodemailer.createTransport({
   host: SMTP_HOST,
@@ -28,11 +35,43 @@ const transporter = nodemailer.createTransport({
  * POST /influencer/request-otp
  * Body: { email }
  */
+
+const uploadDir = path.join(__dirname, '../uploads/profile_images');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// then your storage setup can simply point at uploadDir:
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `${uuidv4()}${ext}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    const allowed = /jpeg|jpg|png/;
+    const ext = allowed.test(path.extname(file.originalname).toLowerCase());
+    const mime = allowed.test(file.mimetype);
+    if (ext && mime) return cb(null, true);
+    cb(new Error('Only JPEG, JPG, and PNG files are allowed'));
+  },
+  limits: { fileSize: 2 * 1024 * 1024 } // 2 MB limit
+});
+
+exports.uploadProfileImage = upload.single('profileImage');
+
+
 exports.requestOtpInfluencer = async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: 'Email is required' });
 
-  const code      = Math.floor(100000 + Math.random() * 900000).toString();
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
   // upsert so we can save an email-only doc first
@@ -40,19 +79,19 @@ exports.requestOtpInfluencer = async (req, res) => {
     { email },
     {
       $set: {
-        otpCode:      code,
+        otpCode: code,
         otpExpiresAt: expiresAt,
-        otpVerified:  false
+        otpVerified: false
       }
     },
     { upsert: true, new: true }
   );
 
   await transporter.sendMail({
-    from:    `"No-Reply" <${SMTP_USER}>`,
-    to:      email,
+    from: `"No-Reply" <${SMTP_USER}>`,
+    to: email,
     subject: 'Verify Influencer',
-    text:    `Your verification code is ${code}. It expires in 10 minutes.`
+    text: `Your verification code is ${code}. It expires in 10 minutes.`
   });
 
   res.json({ message: 'OTP sent to email' });
@@ -97,72 +136,142 @@ exports.verifyOtpInfluencer = async (req, res) => {
  * Body: { name, email, password, phone, socialMedia, categoryId, audienceId, countryId, callingId, bio }
  */
 exports.registerInfluencer = async (req, res) => {
-  const {
-    name, email, password, phone,
-    socialMedia, categoryId, audienceId,
-    countryId, callingId, bio
-  } = req.body;
+  try {
+    // 0) require image
+    if (!req.file) {
+      return res.status(400).json({ message: 'Profile image is required' });
+    }
 
-  // 1) Check OTP
-  const inf = await Influencer.findOne({ email });
-  if (!inf || !inf.otpVerified) {
-    return res.status(400).json({ message: 'Email not verified' });
-  }
-  if (inf.name) {
-    return res.status(400).json({ message: 'Already registered' });
-  }
+    // 1) pull fields
+    const {
+      name, email, password, phone, socialMedia, gender,
+      platformId, manualPlatformName,
+      profileLink, malePercentage, femalePercentage,
+      categories,             // array of Interest IDs
+      audienceAgeRangeId,     // new age-range UUID
+      audienceId,             // legacy count-range ObjectId
+      countryId, callingId, bio
+    } = req.body;
 
-  // 2) Validate refs
-  const [interestDoc, audienceDoc, countryDoc, callingDoc] = await Promise.all([
-    Interest.findById(categoryId),
-    AudienceRange.findById(audienceId),
-    Country.findById(countryId),
-    Country.findById(callingId)
-  ]);
-  if (!interestDoc || !audienceDoc || !countryDoc || !callingDoc) {
-    return res.status(400).json({ message: 'Invalid reference IDs' });
-  }
+    // 2) find & verify OTP
+    const inf = await Influencer.findOne({
+      email: { $regex: `^${email.trim()}$`, $options: 'i' }
+    });
+    if (!inf || !inf.otpVerified) {
+      return res.status(400).json({ message: 'Email not verified' });
+    }
+    if (inf.name) {
+      return res.status(400).json({ message: 'Already registered' });
+    }
 
-  // 3) Fill in fields
-  inf.name         = name;
-  inf.password     = password;
-  inf.phone        = phone;
-  inf.socialMedia  = socialMedia;
-  inf.categoryId   = categoryId;
-  inf.categoryName = interestDoc.name;
-  inf.audienceId   = audienceId;
-  inf.audienceRange= audienceDoc.range;
-  inf.countryId    = countryId;
-  inf.county       = countryDoc.countryName;
-  inf.callingId    = callingId;
-  inf.callingcode  = callingDoc.callingCode;
-  inf.bio          = bio;
+    // 3) resolve platform
+    let platformDoc = await Platform.findOne({ platformId });
+    if (!platformDoc) {
+      return res.status(400).json({ message: 'Invalid platformId' });
+    }
+    if (platformDoc.name === 'Other') {
+      if (!manualPlatformName?.trim()) {
+        return res.status(400).json({
+          message: 'manualPlatformName required when platform is Other'
+        });
+      }
+      platformDoc = await new Platform({ name: manualPlatformName.trim() }).save();
+    }
 
-  // 4) Assign free plan
-  const freePlan = await subscriptionHelper.getFreePlan('Influencer');
-  if (freePlan) {
-    const expires = subscriptionHelper.computeExpiry(freePlan);
-    inf.subscription = {
-      planId:    freePlan.planId,
-      planName:  freePlan.name,
-      startedAt: new Date(),
-      expiresAt: expires,
-      features:  freePlan.features.map(f => ({
-        key:   f.key,
-        limit: typeof f.value === 'number' ? f.value : 0,
-        used:  0
-      }))
+    // 4) validate categories array
+    if (!Array.isArray(categories) || categories.length < 1 || categories.length > 3) {
+      return res.status(400).json({
+        message: 'You must select between 1 and 3 categories'
+      });
+    }
+    const interestDocs = await Interest.find({ _id: { $in: categories } });
+    if (interestDocs.length !== categories.length) {
+      return res.status(400).json({ message: 'Invalid category IDs' });
+    }
+
+    // 5) resolve age & count ranges, country & calling
+    const [ageRangeDoc, countRangeDoc, countryDoc, callingDoc] = await Promise.all([
+      Audience.findOne({ audienceId: audienceAgeRangeId }),
+      AudienceRange.findById(audienceId),
+      Country.findById(countryId),
+      Country.findById(callingId)
+    ]);
+    if (!ageRangeDoc || !countRangeDoc || !countryDoc || !callingDoc) {
+      return res.status(400).json({ message: 'Invalid reference IDs' });
+    }
+
+    // 6) assign all fields
+    inf.name        = name;
+    inf.password    = password;
+    inf.phone       = phone;
+    inf.socialMedia = socialMedia;
+    inf.gender      = gender;
+
+    // platform
+    inf.platformId   = platformDoc._id;
+    inf.platformName = platformDoc.name;
+
+    inf.profileLink  = profileLink;
+    inf.profileImage = `/uploads/profile_images/${req.file.filename}`;
+
+    // audience demographics
+    inf.audienceBifurcation = {
+      malePercentage:   Number(malePercentage),
+      femalePercentage: Number(femalePercentage)
     };
-    inf.subscriptionExpired = false;
-  }
 
-  await inf.save();  // now all required fields are present
-  return res.status(201).json({
-    message:      'Influencer registered successfully',
-    influencerId: inf.influencerId,
-    subscription: inf.subscription
-  });
+    // categories
+    inf.categories   = interestDocs.map(d => d._id);
+    inf.categoryName = interestDocs.map(d => d.name).join(', ');
+
+    // age-range
+    inf.audienceAgeRangeId = ageRangeDoc._id;
+    inf.audienceAgeRange   = ageRangeDoc.range;
+
+    // legacy count-range
+    inf.audienceId    = countRangeDoc._id;
+    inf.audienceRange = countRangeDoc.range;
+
+    // location
+    inf.countryId    = countryId;
+    inf.county       = countryDoc.countryName;
+    inf.callingId    = callingId;
+    inf.callingcode  = callingDoc.callingCode;
+
+    inf.bio = bio;
+
+    // 7) free subscription
+    const freePlan = await subscriptionHelper.getFreePlan('Influencer');
+    if (freePlan) {
+      inf.subscription = {
+        planId:    freePlan.planId,
+        planName:  freePlan.name,
+        startedAt: new Date(),
+        expiresAt: subscriptionHelper.computeExpiry(freePlan),
+        features:  freePlan.features.map(f => ({
+          key:   f.key,
+          limit: typeof f.value === 'number' ? f.value : 0,
+          used:  0
+        }))
+      };
+      inf.subscriptionExpired = false;
+    }
+
+    // 8) save and respond
+    await inf.save();
+    return res.status(201).json({
+      message:      'Influencer registered successfully',
+      influencerId: inf.influencerId,
+      subscription: inf.subscription
+    });
+
+  } catch (err) {
+    console.error('Error in registerInfluencer:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
 };
+
+
 
 
 // Login an influencer
@@ -196,9 +305,9 @@ exports.login = async (req, res) => {
 
     // 4) Return profile + token
     return res.status(200).json({
-      message:    'Login successful',
+      message: 'Login successful',
       influencerId: influencer.influencerId,
-      categoryId:   influencer.categoryId,
+      categoryId: influencer.categoryId,
       token
     });
   } catch (error) {
@@ -260,10 +369,10 @@ exports.getCampaignsByInfluencer = async (req, res) => {
   try {
     const {
       influencerId,
-      page    = 1,
-      limit   = 10,
-      search  = '',
-      sortBy    = 'createdAt',
+      page = 1,
+      limit = 10,
+      search = '',
+      sortBy = 'createdAt',
       sortOrder = 'desc'    // 'asc' or 'desc'
     } = req.body;
 
@@ -275,12 +384,12 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     const filter = { influencerId };
     if (search.trim()) {
       filter.$or = [
-        { name:        { $regex: search, $options: 'i' } },
+        { name: { $regex: search, $options: 'i' } },
         { description: { $regex: search, $options: 'i' } }
       ];
     }
 
-    const skip = (Math.max(page,1) - 1) * Math.max(limit,1);
+    const skip = (Math.max(page, 1) - 1) * Math.max(limit, 1);
     const sortDirection = sortOrder === 'asc' ? 1 : -1;
 
     // Total count for pagination
@@ -294,8 +403,8 @@ exports.getCampaignsByInfluencer = async (req, res) => {
 
     return res.status(200).json({
       total,
-      page:      Number(page),
-      pages:     Math.ceil(total / limit),
+      page: Number(page),
+      pages: Math.ceil(total / limit),
       campaigns
     });
   } catch (error) {

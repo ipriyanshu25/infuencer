@@ -26,6 +26,8 @@ const policy = require('./routes/policyRoutes');
 const contact = require('./routes/contactRoutes');
 const faqs = require('./routes/faqsRoutes');
 const dashboard = require('./routes/dashboardRoutes');
+const platform = require('./routes/platformRoutes');
+const audience = require('./routes/audiencerangeRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -145,6 +147,8 @@ app.use('/policy',policy);
 app.use('/contact',contact);
 app.use('/faqs',faqs);
 app.use('/dash',dashboard);
+app.use('/platform',platform);
+app.use('/audienceRange',audience);
 
 // connect to Mongo & start server
 const PORT = process.env.PORT || 5000;

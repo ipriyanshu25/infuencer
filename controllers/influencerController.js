@@ -137,23 +137,33 @@ exports.verifyOtpInfluencer = async (req, res) => {
  */
 exports.registerInfluencer = async (req, res) => {
   try {
-    // 0) require image
+    // require uploaded image
     if (!req.file) {
       return res.status(400).json({ message: 'Profile image is required' });
     }
 
-    // 1) pull fields
+    // destructure form-data fields
     const {
-      name, email, password, phone, socialMedia, gender,
-      platformId, manualPlatformName,
-      profileLink, malePercentage, femalePercentage,
-      categories,             // array of Interest IDs
-      audienceAgeRangeId,     // new age-range UUID
-      audienceId,             // legacy count-range ObjectId
-      countryId, callingId, bio
+      name,
+      email,
+      password,
+      phone,
+      socialMedia,
+      gender,                     // 0 | 1 | 2
+      platformId,
+      manualPlatformName,         // only if “Other”
+      profileLink,
+      malePercentage,
+      femalePercentage,
+      categories,                 // [Interest _id …]
+      audienceAgeRangeId,         // Audience UUID
+      audienceId,                 // AudienceRange ObjectId
+      countryId,
+      callingId,
+      bio
     } = req.body;
 
-    // 2) find & verify OTP
+    // verify OTP step
     const inf = await Influencer.findOne({
       email: { $regex: `^${email.trim()}$`, $options: 'i' }
     });
@@ -164,7 +174,7 @@ exports.registerInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Already registered' });
     }
 
-    // 3) resolve platform
+    // resolve platform
     let platformDoc = await Platform.findOne({ platformId });
     if (!platformDoc) {
       return res.status(400).json({ message: 'Invalid platformId' });
@@ -178,7 +188,7 @@ exports.registerInfluencer = async (req, res) => {
       platformDoc = await new Platform({ name: manualPlatformName.trim() }).save();
     }
 
-    // 4) validate categories array
+    // validate categories
     if (!Array.isArray(categories) || categories.length < 1 || categories.length > 3) {
       return res.status(400).json({
         message: 'You must select between 1 and 3 categories'
@@ -189,8 +199,13 @@ exports.registerInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Invalid category IDs' });
     }
 
-    // 5) resolve age & count ranges, country & calling
-    const [ageRangeDoc, countRangeDoc, countryDoc, callingDoc] = await Promise.all([
+    // resolve age & count ranges, country, calling
+    const [
+      ageRangeDoc,
+      countRangeDoc,
+      countryDoc,
+      callingDoc
+    ] = await Promise.all([
       Audience.findOne({ audienceId: audienceAgeRangeId }),
       AudienceRange.findById(audienceId),
       Country.findById(countryId),
@@ -200,47 +215,41 @@ exports.registerInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Invalid reference IDs' });
     }
 
-    // 6) assign all fields
+    // populate influencer fields
     inf.name        = name;
     inf.password    = password;
     inf.phone       = phone;
     inf.socialMedia = socialMedia;
-    inf.gender      = gender;
+    inf.gender      = Number(gender);
 
-    // platform
     inf.platformId   = platformDoc._id;
     inf.platformName = platformDoc.name;
 
     inf.profileLink  = profileLink;
     inf.profileImage = `/uploads/profile_images/${req.file.filename}`;
 
-    // audience demographics
     inf.audienceBifurcation = {
       malePercentage:   Number(malePercentage),
       femalePercentage: Number(femalePercentage)
     };
 
-    // categories
     inf.categories   = interestDocs.map(d => d._id);
-    inf.categoryName = interestDocs.map(d => d.name).join(', ');
+    inf.categoryName = interestDocs.map(d => d.name);
 
-    // age-range
     inf.audienceAgeRangeId = ageRangeDoc._id;
     inf.audienceAgeRange   = ageRangeDoc.range;
 
-    // legacy count-range
     inf.audienceId    = countRangeDoc._id;
     inf.audienceRange = countRangeDoc.range;
 
-    // location
-    inf.countryId    = countryId;
-    inf.county       = countryDoc.countryName;
-    inf.callingId    = callingId;
-    inf.callingcode  = callingDoc.callingCode;
+    inf.countryId   = countryId;
+    inf.county      = countryDoc.countryName;
+    inf.callingId   = callingId;
+    inf.callingcode = callingDoc.callingCode;
 
     inf.bio = bio;
 
-    // 7) free subscription
+    // assign free plan
     const freePlan = await subscriptionHelper.getFreePlan('Influencer');
     if (freePlan) {
       inf.subscription = {
@@ -257,7 +266,6 @@ exports.registerInfluencer = async (req, res) => {
       inf.subscriptionExpired = false;
     }
 
-    // 8) save and respond
     await inf.save();
     return res.status(201).json({
       message:      'Influencer registered successfully',
@@ -270,7 +278,6 @@ exports.registerInfluencer = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
-
 
 
 

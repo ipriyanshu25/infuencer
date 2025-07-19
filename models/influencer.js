@@ -38,29 +38,37 @@ const influencerSchema = new mongoose.Schema({
     femalePercentage: { type: Number, min: 0, max: 100, required: function() { return this.otpVerified; } }
   },
 
-  // Categories (1–3)
-  categories: {
-    type: [{ 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: 'Interest',
-      required: true 
-    }],
-    validate: {
-      validator: function(arr) {
-        if (!this.otpVerified) return true;
-        return arr.length >= 1 && arr.length <= 3;
-      },
-      message: 'You must select between 1 and 3 categories.'
+categories: {
+  type: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Interest',
+    required: true
+  }],
+  validate: {
+    validator: function(arr) {
+      // only enforce the 1–3 rule once otpVerified
+      if (!this.otpVerified) return true;
+      return Array.isArray(arr) && arr.length >= 1 && arr.length <= 3;
     },
-    required: function() { return this.otpVerified; }
+    message: 'You must select between 1 and 3 categories.'
   },
+  required: function() { return this.otpVerified; }
+},
 
-  // Denormalized array of category names
-  categoryName: {
-    type: [String],
-    default: [],
-    required: function() { return this.otpVerified; }
+// ─── Denormalized category names ──────────────────────────────────────────────
+categoryName: {
+  type: [String],          // store each selected Interest.name here
+  default: [],  
+  validate: {
+    validator: function(arr) {
+      // names array should match the categories array length
+      if (!this.otpVerified) return true;
+      return Array.isArray(arr) && arr.length === this.categories.length;
+    },
+    message: 'categoryName entries must correspond 1:1 with categories.'
   },
+  required: function() { return this.otpVerified; }
+},
 
   // Platform reference; denormalized name for manual or display
   platformId: {

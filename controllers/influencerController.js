@@ -135,35 +135,45 @@ exports.verifyOtpInfluencer = async (req, res) => {
  * POST /influencer/register
  * Body: { name, email, password, phone, socialMedia, categoryId, audienceId, countryId, callingId, bio }
  */
+// controllers/influencerController.js
 exports.registerInfluencer = async (req, res) => {
   try {
-    // require uploaded image
+    // 0) ensure profile image uploaded
     if (!req.file) {
       return res.status(400).json({ message: 'Profile image is required' });
     }
 
-    // destructure form-data fields
-    const {
+    // 1) pull fields out of form-data
+    let {
       name,
       email,
       password,
       phone,
       socialMedia,
-      gender,                     // 0 | 1 | 2
+      gender,                   // "0", "1" or "2"
       platformId,
-      manualPlatformName,         // only if “Other”
+      manualPlatformName,       // only if platform === Other
       profileLink,
       malePercentage,
       femalePercentage,
-      categories,                 // [Interest _id …]
-      audienceAgeRangeId,         // Audience UUID
-      audienceId,                 // AudienceRange ObjectId
+      categories,               // JSON string or Array of Interest _ids
+      audienceAgeRangeId,       // UUID on Audience
+      audienceId,               // ObjectId of AudienceRange
       countryId,
       callingId,
       bio
     } = req.body;
 
-    // verify OTP step
+    // 1a) parse categories if it's a string
+    if (typeof categories === 'string') {
+      try {
+        categories = JSON.parse(categories);
+      } catch {
+        return res.status(400).json({ message: 'categories must be a JSON array' });
+      }
+    }
+
+    // 2) find influencer record & check OTP
     const inf = await Influencer.findOne({
       email: { $regex: `^${email.trim()}$`, $options: 'i' }
     });
@@ -174,7 +184,7 @@ exports.registerInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Already registered' });
     }
 
-    // resolve platform
+    // 3) resolve & possibly create Platform
     let platformDoc = await Platform.findOne({ platformId });
     if (!platformDoc) {
       return res.status(400).json({ message: 'Invalid platformId' });
@@ -182,13 +192,13 @@ exports.registerInfluencer = async (req, res) => {
     if (platformDoc.name === 'Other') {
       if (!manualPlatformName?.trim()) {
         return res.status(400).json({
-          message: 'manualPlatformName required when platform is Other'
+          message: 'manualPlatformName is required when platform is Other'
         });
       }
       platformDoc = await new Platform({ name: manualPlatformName.trim() }).save();
     }
 
-    // validate categories
+    // 4) validate categories array length & existence
     if (!Array.isArray(categories) || categories.length < 1 || categories.length > 3) {
       return res.status(400).json({
         message: 'You must select between 1 and 3 categories'
@@ -199,13 +209,8 @@ exports.registerInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Invalid category IDs' });
     }
 
-    // resolve age & count ranges, country, calling
-    const [
-      ageRangeDoc,
-      countRangeDoc,
-      countryDoc,
-      callingDoc
-    ] = await Promise.all([
+    // 5) resolve age-range, count-range, country & calling
+    const [ageRangeDoc, countRangeDoc, countryDoc, callingDoc] = await Promise.all([
       Audience.findOne({ audienceId: audienceAgeRangeId }),
       AudienceRange.findById(audienceId),
       Country.findById(countryId),
@@ -215,7 +220,7 @@ exports.registerInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Invalid reference IDs' });
     }
 
-    // populate influencer fields
+    // 6) assign all fields
     inf.name        = name;
     inf.password    = password;
     inf.phone       = phone;
@@ -249,7 +254,7 @@ exports.registerInfluencer = async (req, res) => {
 
     inf.bio = bio;
 
-    // assign free plan
+    // 7) assign free subscription
     const freePlan = await subscriptionHelper.getFreePlan('Influencer');
     if (freePlan) {
       inf.subscription = {
@@ -266,6 +271,7 @@ exports.registerInfluencer = async (req, res) => {
       inf.subscriptionExpired = false;
     }
 
+    // 8) save & respond
     await inf.save();
     return res.status(201).json({
       message:      'Influencer registered successfully',
@@ -278,6 +284,8 @@ exports.registerInfluencer = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
 
 
 

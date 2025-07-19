@@ -5,7 +5,6 @@ const { v4: uuidv4 } = require('uuid');
 
 const emailRegex = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}$/;
 const phoneRegex = /^[0-9]{10}$/;
-const urlRegex   = /^(https?:\/\/)?([\w\-])+\.{1}[a-zA-Z]{2,}(\/\S*)?$/;
 
 const influencerSchema = new mongoose.Schema({
   influencerId: {
@@ -29,7 +28,7 @@ const influencerSchema = new mongoose.Schema({
     required: function() { return this.otpVerified; }
   },
 
-  profileLink: { type: String, match: [urlRegex, 'Invalid URL'], required: function() { return this.otpVerified; } },
+  profileLink: { type: String, required: function() { return this.otpVerified; } },
   profileImage:{ type: String, required: function() { return this.otpVerified; } },
 
   // Audience demographics

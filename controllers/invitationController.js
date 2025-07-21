@@ -147,29 +147,60 @@ exports.acceptInvitation = async (req, res) => {
   }
 };
 
-
-
-exports.getActiveInvitations = async (req, res) => {
+exports.getActiveCampaigns = async (req, res) => {
   try {
+    //  ➡️  POST now, so read from body
     const { brandId, influencerId } = req.body;
+
+    /* 0️⃣ Basic validation */
     if (!brandId || !influencerId) {
       return res
         .status(400)
-        .json({ message: 'brandId and influencerId are required' });
+        .json({ message: 'brandId and influencerId are both required' });
     }
 
-    // Filter for only "invited" invitations
-    const filter = {
-      brandId,
+    /* 1️⃣ Guard-rail: make sure the brand exists */
+    const brandExists = await Brand.exists({ brandId });
+    if (!brandExists) {
+      return res.status(404).json({ message: 'Brand not found' });
+    }
+
+    /* 2️⃣ Fetch all LIVE campaigns for this brand */
+    const liveCampaigns = await Campaign.find({ brandId, isActive: 1 }).lean();
+
+    /* 3️⃣ Get every invitation that matches this influencer + campaign set */
+    const campaignIds = liveCampaigns.map(c => c.campaignsId);
+    const invitations = await Invitation.find({
       influencerId,
-      isInvited: 1
-    };
+      campaignId: { $in: campaignIds }
+    }).lean();
 
-    const activeInvitations = await Invitation.find(filter)
-      .sort({ createdAt: -1 }); // most recent first, if you like
+    /* 4️⃣ Index invitations for O(1) lookup */
+    const invMap = Object.fromEntries(
+      invitations.map(inv => [inv.campaignId, inv])
+    );
 
-    res.json({ data: activeInvitations });
+    /* 5️⃣ Build response & optionally flip isInvited */
+    const data = await Promise.all(
+      liveCampaigns.map(async campaign => {
+        let invitation = invMap[campaign.campaignsId] || null;
+
+        // Upgrade an old “application” row ➜ formal invitation
+        if (invitation && invitation.isInvited === 0) {
+          await Invitation.updateOne(
+            { _id: invitation._id },
+            { $set: { isInvited: 1 } }
+          );
+          invitation.isInvited = 1;    // reflect locally
+        }
+
+        return { campaign, invitation };
+      })
+    );
+
+    res.json({ total: data.length, data });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: err.message });
   }
 };

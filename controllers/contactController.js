@@ -17,12 +17,12 @@ exports.sendContact = async (req, res) => {
 
     // 2) Configure transporter
     const transporter = nodemailer.createTransport({
-      host:   process.env.SMTP_HOST,
-      port:   Number(process.env.SMTP_PORT),
+      host:   process.env.SMTP_HOST1,
+      port:   Number(process.env.SMTP_PORT1),
       secure: process.env.SMTP_SECURE === 'true',
       auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
+        user: process.env.SMTP_USER1,
+        pass: process.env.SMTP_PASS1
       },
       logger: true,
       debug:  true,

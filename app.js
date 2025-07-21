@@ -28,7 +28,7 @@ const faqs = require('./routes/faqsRoutes');
 const dashboard = require('./routes/dashboardRoutes');
 const platform = require('./routes/platformRoutes');
 const audience = require('./routes/audiencerangeRoutes');
-const invitation = require('./routes/invitationROutes');
+const invitation = require('./routes/invitationRoutes');
 
 const app = express();
 const server = http.createServer(app);

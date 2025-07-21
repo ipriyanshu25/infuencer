@@ -67,18 +67,27 @@ exports.createInvitation = async (req, res) => {
 exports.getInvitations = async (req, res) => {
   try {
     let {
-      search = '',
-      sortBy = 'createdAt:desc',
-      page = 1,
-      limit = 10
+      influencerId,
+      search     = '',
+      sortBy     = 'createdAt:desc',
+      page       = 1,
+      limit      = 10
     } = req.body;
 
-    page = parseInt(page, 10);
+    // influencerId is required
+    if (!influencerId) {
+      return res
+        .status(400)
+        .json({ message: 'influencerId is required' });
+    }
+
+    page  = parseInt(page,  10);
     limit = parseInt(limit, 10);
 
-    // Build filter
+    // Build filter: only this influencer, plus optional text search
     const searchRegex = new RegExp(search, 'i');
     const filter = {
+      influencerId,
       $or: [
         { 'brand.name': searchRegex },
         { 'campaign.productOrServiceName': searchRegex }
@@ -89,6 +98,7 @@ exports.getInvitations = async (req, res) => {
     const [field, order] = sortBy.split(':');
     const sort = { [field]: order === 'desc' ? -1 : 1 };
 
+    // Query
     const total = await Invitation.countDocuments(filter);
     const invitations = await Invitation.find(filter)
       .sort(sort)
@@ -108,6 +118,7 @@ exports.getInvitations = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+;
 
 /**
  * Accept Invitation

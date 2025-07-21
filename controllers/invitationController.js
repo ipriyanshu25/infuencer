@@ -42,6 +42,7 @@ exports.createInvitation = async (req, res) => {
         brandName: campaign.brandName,
         productOrServiceName: campaign.productOrServiceName,
         description: campaign.description,
+        budget:campaign.budget,
         timeline: campaign.timeline
       }
     });

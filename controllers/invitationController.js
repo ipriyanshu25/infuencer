@@ -9,9 +9,9 @@ const Campaign = require('../models/campaign');
  */
 exports.createInvitation = async (req, res) => {
   try {
-    const { brandId, influencerId, campaignId, isAccepted = 0 } = req.body;
+    const { brandId, influencerId, campaignId, isAccepted = 0,isInvited=1} = req.body;
 
-    // 1️⃣ check for existing invitation
+    // 1️⃣ Prevent duplicates
     const existing = await Invitation.findOne({ influencerId, campaignId });
     if (existing) {
       return res
@@ -19,38 +19,34 @@ exports.createInvitation = async (req, res) => {
         .json({ message: 'An invitation for this influencer and campaign already exists' });
     }
 
-    // 2️⃣ fetch related Brand and Campaign
-    const brand = await Brand.findOne({ brandId });
+    // 2️⃣ Load Brand & Campaign
+    const brand    = await Brand.findOne({ brandId });
     const campaign = await Campaign.findOne({ campaignsId: campaignId });
     if (!brand)    return res.status(404).json({ message: 'Brand not found' });
     if (!campaign) return res.status(404).json({ message: 'Campaign not found' });
 
-    // 3️⃣ create & save
+    // 3️⃣ Create with isInvited = 1
     const invitation = new Invitation({
       brandId,
       influencerId,
       campaignId,
+
+      // new field:
+      isInvited,
       isAccepted,
-      brand: {
-        brandId: brand.brandId,
-        name: brand.name,
-        email: brand.email,
-        phone: brand.phone
-      },
       campaign: {
-        campaignsId: campaign.campaignsId,
-        brandName: campaign.brandName,
+        campaignsId:          campaign.campaignsId,
+        brandName:            campaign.brandName,
         productOrServiceName: campaign.productOrServiceName,
-        description: campaign.description,
-        budget:campaign.budget,
-        timeline: campaign.timeline
+        description:          campaign.description,
+        budget:               campaign.budget,
+        timeline:             campaign.timeline
       }
     });
 
     await invitation.save();
     res.status(201).json(invitation);
   } catch (err) {
-    // if the unique-index fires, handle it here too
     if (err.code === 11000) {
       return res
         .status(400)
@@ -151,3 +147,29 @@ exports.acceptInvitation = async (req, res) => {
   }
 };
 
+
+
+exports.getActiveInvitations = async (req, res) => {
+  try {
+    const { brandId, influencerId } = req.body;
+    if (!brandId || !influencerId) {
+      return res
+        .status(400)
+        .json({ message: 'brandId and influencerId are required' });
+    }
+
+    // Filter for only "invited" invitations
+    const filter = {
+      brandId,
+      influencerId,
+      isInvited: 1
+    };
+
+    const activeInvitations = await Invitation.find(filter)
+      .sort({ createdAt: -1 }); // most recent first, if you like
+
+    res.json({ data: activeInvitations });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};

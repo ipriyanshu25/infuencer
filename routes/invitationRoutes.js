@@ -10,5 +10,6 @@ router.post('/getAll', invitationController.getInvitations);
 
 
 router.post('/accept', invitationController.acceptInvitation);
+router.post('/active',    invitationController.getActiveInvitations);
 
 module.exports = router;

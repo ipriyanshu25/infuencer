@@ -17,6 +17,10 @@ const invitationSchema = new mongoose.Schema({
     // 0: not accepted, 1: accepted
     isAccepted: { type: Number, enum: [0, 1], default: 0 },
 
+
+    isInvited:      { type: Number, enum: [0, 1], default: 0},
+
+
     // Embedded brand details for quick access
     brand: {
         brandId: { type: String },

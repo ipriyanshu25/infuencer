@@ -54,6 +54,7 @@ exports.sendOrGenerateContract = async (req, res) => {
       influencerId,
       campaignId,
       brandName,
+      effectiveDate, 
       brandAddress,
       influencerName,
       influencerAddress,

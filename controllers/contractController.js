@@ -75,19 +75,39 @@ exports.sendOrGenerateContract = async (req, res) => {
       res.setHeader('Content-Disposition', 'attachment; filename=Contract.pdf');
       doc.pipe(res);
 
-      // — Logos —
+      // — Logos (only if defined) —
       const logoSize = 50;
-      doc.image(brand.logoUrl, doc.page.margins.left, doc.page.margins.top, { width: logoSize });
-      doc.image(
-        influencer.logoUrl,
-        doc.page.width - doc.page.margins.right - logoSize,
-        doc.page.margins.top,
-        { width: logoSize }
-      );
+      if (brand.logoUrl) {
+        try {
+          doc.image(
+            brand.logoUrl,
+            doc.page.margins.left,
+            doc.page.margins.top,
+            { width: logoSize }
+          );
+        } catch (err) {
+          console.warn('Could not load brand logo:', err.message);
+        }
+      }
+      if (influencer.logoUrl) {
+        try {
+          const x = doc.page.width - doc.page.margins.right - logoSize;
+          doc.image(
+            influencer.logoUrl,
+            x,
+            doc.page.margins.top,
+            { width: logoSize }
+          );
+        } catch (err) {
+          console.warn('Could not load influencer logo:', err.message);
+        }
+      }
       doc.moveDown(4);
 
       // — Header —
-      doc.fontSize(20).text('Influencer Marketing Contract', { align: 'center' }).moveDown();
+      doc.fontSize(20)
+         .text('Influencer Marketing Contract', { align: 'center' })
+         .moveDown();
 
       // — Details —
       doc.fontSize(14).text('Contract Details', { underline: true });
@@ -110,15 +130,22 @@ exports.sendOrGenerateContract = async (req, res) => {
 
       // — Deliverables —
       doc.fontSize(14).text('Deliverables', { underline: true });
-      doc.fontSize(12).text(paymentTerms).moveDown();
+      doc.fontSize(12)
+         .text(paymentTerms)
+         .moveDown();
 
       // — Compensation —
       doc.fontSize(14).text('Compensation', { underline: true });
-      doc.fontSize(12).text(`Fee: $${feeAmount}`).moveDown();
+      doc.fontSize(12)
+         .text(`Fee: $${feeAmount}`)
+         .moveDown();
 
       // — Signatures —
-      doc.fontSize(14).text('Signatures', { underline: true }).moveDown(2);
-      doc.text('_________________________\nBrand Representative').moveDown(2);
+      doc.fontSize(14)
+         .text('Signatures', { underline: true })
+         .moveDown(2);
+      doc.text('_________________________\nBrand Representative')
+         .moveDown(2);
       doc.text('_________________________\nInfluencer');
 
       doc.end();
@@ -200,36 +227,62 @@ exports.viewContractPdf = async (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename=Contract-${contractId}.pdf`);
     doc.pipe(res);
 
-    // Logos
+    // Logos (conditional)
     const logoSize = 50;
-    doc.image(brand.logoUrl, doc.page.margins.left, doc.page.margins.top, { width: logoSize });
-    doc.image(
-      influencer.logoUrl,
-      doc.page.width - doc.page.margins.right - logoSize,
-      doc.page.margins.top,
-      { width: logoSize }
-    );
+    if (brand.logoUrl) {
+      try {
+        doc.image(
+          brand.logoUrl,
+          doc.page.margins.left,
+          doc.page.margins.top,
+          { width: logoSize }
+        );
+      } catch (err) {
+        console.warn('Brand logo failed to load:', err.message);
+      }
+    }
+    if (influencer.logoUrl) {
+      try {
+        const x = doc.page.width - doc.page.margins.right - logoSize;
+        doc.image(
+          influencer.logoUrl,
+          x,
+          doc.page.margins.top,
+          { width: logoSize }
+        );
+      } catch (err) {
+        console.warn('Influencer logo failed to load:', err.message);
+      }
+    }
     doc.moveDown(4);
 
-    // Body (same as above)
-    doc.fontSize(20).text('INFLUENCER COLLABORATION AGREEMENT', { align: 'center' }).moveDown();
+    // Body
+    doc.fontSize(20)
+       .text('INFLUENCER COLLABORATION AGREEMENT', { align: 'center' })
+       .moveDown();
 
-    doc.fontSize(12).text(`This Agreement is made on ${contract.effectiveDate} between:\n`);
-    doc.text(`1. Brand:      ${contract.brandName}`);
-    doc.text(`   Address:    ${contract.brandAddress}`).moveDown();
-    doc.text(`2. Influencer: ${contract.influencerName}`);
-    doc.text(`   Address:    ${contract.influencerAddress}`);
-    doc.text(`   Handle:     ${contract.influencerHandle}`).moveDown();
-
-    doc.text(`3. Scope of Work\n${contract.deliverableDescription}`).moveDown();
-    doc.text(`4. Compensation\nBrand agrees to pay Influencer $${contract.feeAmount}.`).moveDown();
-    doc.text(
-      `5. Term\nFrom ${new Date(campaign.timeline.startDate).toDateString()} to ${new Date(campaign.timeline.endDate).toDateString()}.`
-    ).moveDown();
-
-    doc.text('6. Signatures\n').moveDown();
-    doc.text('_____________________________\nBrand Representative').moveDown();
-    doc.text('_____________________________\nInfluencer');
+    doc.fontSize(12)
+       .text(`This Agreement is made on ${contract.effectiveDate} between:\n`)
+       .text(`1. Brand:      ${contract.brandName}`)
+       .text(`   Address:    ${contract.brandAddress}`)
+       .moveDown()
+       .text(`2. Influencer: ${contract.influencerName}`)
+       .text(`   Address:    ${contract.influencerAddress}`)
+       .text(`   Handle:     ${contract.influencerHandle}`)
+       .moveDown()
+       .text(`3. Scope of Work\n${contract.deliverableDescription}`)
+       .moveDown()
+       .text(`4. Compensation\nBrand agrees to pay Influencer $${contract.feeAmount}.`)
+       .moveDown()
+       .text(
+         `5. Term\nFrom ${new Date(campaign.timeline.startDate).toDateString()} to ${new Date(campaign.timeline.endDate).toDateString()}.`
+       )
+       .moveDown()
+       .text('6. Signatures\n')
+       .moveDown()
+       .text('_____________________________\nBrand Representative')
+       .moveDown()
+       .text('_____________________________\nInfluencer');
 
     doc.end();
 

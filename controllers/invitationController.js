@@ -2,6 +2,7 @@ const Invitation = require('../models/invitation');
 const ApplyCampaing = require('../models/applyCampaign');
 const Campaign      = require('../models/campaign');
 const Influencer    = require('../models/influencer');
+const Brand = require('../models/brand');
 
 /**
  * Create a new Invitation

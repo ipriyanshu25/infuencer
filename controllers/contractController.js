@@ -1,11 +1,17 @@
+// controllers/contractController.js
+
 const PDFDocument      = require('pdfkit');
 const Contract         = require('../models/contract');
 const Campaign         = require('../models/campaign');
+const Brand            = require('../models/brand');
+const Influencer       = require('../models/influencer');
 const ApplyCampaign    = require('../models/applyCampaign');
 
 exports.sendOrGenerateContract = async (req, res) => {
   try {
     const {
+      brandId,
+      influencerId,
       campaignId,
       effectiveDate,
       brandName,
@@ -14,32 +20,39 @@ exports.sendOrGenerateContract = async (req, res) => {
       influencerAddress,
       influencerHandle,
       feeAmount,
-      paymentTerms,    // from textarea
+      paymentTerms,    // textarea
       type             // 0 = PDF, 1 = save
     } = req.body;
 
-    // 1) Validate basic inputs
-    if (![0, 1].includes(+type)) {
-      return res.status(400).json({ message: 'Invalid type. Must be 0 (PDF) or 1 (save)' });
+    // 1) Validate
+    if (![0,1].includes(+type)) {
+      return res.status(400).json({ message: 'Invalid type; must be 0 (PDF) or 1 (save)' });
     }
-    if (!campaignId || !effectiveDate || !brandName || !brandAddress
+    if (!brandId || !influencerId || !campaignId
+        || !effectiveDate || !brandName || !brandAddress
         || !influencerName || !influencerAddress || !influencerHandle
         || !feeAmount || !paymentTerms) {
       return res.status(400).json({
-        message: 'All of campaignId, effectiveDate, brandName, brandAddress, influencerName, influencerAddress, influencerHandle, feeAmount and paymentTerms are required'
+        message: 'brandId, influencerId, campaignId, effectiveDate, brandName, brandAddress, influencerName, influencerAddress, influencerHandle, feeAmount and paymentTerms are all required'
       });
     }
 
-    // 2) Load campaign for timeline
-    const campaign = await Campaign.findOne({ campaignsId: campaignId });
-    if (!campaign || !campaign.timeline) {
-      return res.status(404).json({ message: 'Campaign or timeline not found' });
-    }
+    // 2) Load related records
+    const [ campaign, brand, influencer ] = await Promise.all([
+      Campaign.findOne({ campaignsId: campaignId }),
+      Brand.findOne({ brandId }),
+      Influencer.findOne({ influencerId })
+    ]);
+
+    if (!campaign)      return res.status(404).json({ message: 'Campaign not found' });
+    if (!brand)         return res.status(404).json({ message: 'Brand not found' });
+    if (!influencer)    return res.status(404).json({ message: 'Influencer not found' });
 
     // 3) Build payload
     const contractData = {
+      brandId,
+      influencerId,
       campaignId,
-      effectiveDate,
       brandName,
       brandAddress,
       influencerName,
@@ -55,63 +68,77 @@ exports.sendOrGenerateContract = async (req, res) => {
       isAssigned: 1
     };
 
-    // 4) type=0 → stream PDF (no DB save)
+    // 4) PDF only?
     if (+type === 0) {
-      const doc = new PDFDocument();
+      const doc = new PDFDocument({ margin: 50 });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', 'attachment; filename=Contract.pdf');
       doc.pipe(res);
 
-      doc.fontSize(20).text('Influencer Marketing Contract', { align: 'center' });
-      doc.moveDown();
+      // — Logos —
+      const logoSize = 50;
+      doc.image(brand.logoUrl, doc.page.margins.left, doc.page.margins.top, { width: logoSize });
+      doc.image(
+        influencer.logoUrl,
+        doc.page.width - doc.page.margins.right - logoSize,
+        doc.page.margins.top,
+        { width: logoSize }
+      );
+      doc.moveDown(4);
 
+      // — Header —
+      doc.fontSize(20).text('Influencer Marketing Contract', { align: 'center' }).moveDown();
+
+      // — Details —
       doc.fontSize(14).text('Contract Details', { underline: true });
-      doc.fontSize(12).text(`Effective Date: ${effectiveDate}`);
-      doc.text(`Start Date: ${new Date(campaign.timeline.startDate).toDateString()}`);
-      doc.text(`End Date: ${new Date(campaign.timeline.endDate).toDateString()}`);
-      doc.moveDown();
+      doc.fontSize(12)
+         .text(`Effective Date: ${effectiveDate}`)
+         .text(`Start Date: ${new Date(campaign.timeline.startDate).toDateString()}`)
+         .text(`End Date:   ${new Date(campaign.timeline.endDate).toDateString()}`)
+         .moveDown();
 
+      // — Parties —
       doc.fontSize(14).text('Parties Involved', { underline: true });
-      doc.fontSize(12).text(`Brand: ${brandName}`);
-      doc.text(`Address: ${brandAddress}`);
-      doc.moveDown();
-      doc.text(`Influencer: ${influencerName}`);
-      doc.text(`Address: ${influencerAddress}`);
-      doc.text(`Handle: ${influencerHandle}`);
-      doc.moveDown();
+      doc.fontSize(12)
+         .text(`Brand:      ${brandName}`)
+         .text(`Address:    ${brandAddress}`)
+         .moveDown()
+         .text(`Influencer: ${influencerName}`)
+         .text(`Address:    ${influencerAddress}`)
+         .text(`Handle:     ${influencerHandle}`)
+         .moveDown();
 
+      // — Deliverables —
       doc.fontSize(14).text('Deliverables', { underline: true });
-      doc.fontSize(12).text(paymentTerms);
-      doc.moveDown();
+      doc.fontSize(12).text(paymentTerms).moveDown();
 
+      // — Compensation —
       doc.fontSize(14).text('Compensation', { underline: true });
-      doc.fontSize(12).text(`Fee: $${feeAmount}`);
-      doc.moveDown();
+      doc.fontSize(12).text(`Fee: $${feeAmount}`).moveDown();
 
-      doc.fontSize(14).text('Signatures', { underline: true });
-      doc.moveDown(2);
-      doc.text('_________________________\nBrand Representative');
-      doc.moveDown(2);
+      // — Signatures —
+      doc.fontSize(14).text('Signatures', { underline: true }).moveDown(2);
+      doc.text('_________________________\nBrand Representative').moveDown(2);
       doc.text('_________________________\nInfluencer');
 
       doc.end();
       return;
     }
 
-    // 5) type=1 → save to DB
+    // 5) Save to DB
     const newContract = new Contract(contractData);
     await newContract.save();
 
-    // 6) Mark approved in ApplyCampaign
+    // 6) Mark approved
     let appRec = await ApplyCampaign.findOne({ campaignId });
     if (!appRec) {
       appRec = new ApplyCampaign({
         campaignId,
         applicants: [],
-        approved:   [{ influencerName }]
+        approved:   [{ influencerId, name: influencerName }]
       });
     } else {
-      appRec.approved = [{ influencerName }];
+      appRec.approved = [{ influencerId, name: influencerName }];
     }
     await appRec.save();
 
@@ -121,29 +148,27 @@ exports.sendOrGenerateContract = async (req, res) => {
       contract: newContract
     });
 
-  } catch (error) {
-    console.error('Error in sendOrGenerateContract:', error);
-    return res.status(500).json({ message: 'Internal server error' });
+  } catch (err) {
+    console.error('Error in sendOrGenerateContract:', err);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
 
 exports.getContract = async (req, res) => {
   try {
-    const { brandName, influencerName } = req.body;
-    if (!brandName || !influencerName) {
-      return res.status(400).json({ message: 'brandName and influencerName are required' });
+    const { brandId, influencerId } = req.body;
+    if (!brandId || !influencerId) {
+      return res.status(400).json({ message: 'brandId and influencerId are required' });
     }
-
-    const contracts = await Contract.find({ brandName, influencerName });
+    const contracts = await Contract.find({ brandId, influencerId });
     if (!contracts.length) {
-      return res.status(404).json({ message: 'No contracts found for the given Brand and Influencer' });
+      return res.status(404).json({ message: 'No contracts found for that Brand & Influencer' });
     }
     res.status(200).json({ contracts });
-
-  } catch (error) {
-    console.error('Error fetching contract:', error);
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error('Error fetching contracts:', err);
+    res.status(500).json({ error: err.message });
   }
 };
 
@@ -156,47 +181,61 @@ exports.viewContractPdf = async (req, res) => {
     }
 
     const contract = await Contract.findOne({ contractId });
-    if (!contract || !contract.timeline) {
-      return res.status(404).json({ message: 'Contract or timeline not found' });
+    if (!contract) {
+      return res.status(404).json({ message: 'Contract not found' });
     }
 
-    const doc = new PDFDocument();
+    // re-fetch to get logos & timeline
+    const [ campaign, brand, influencer ] = await Promise.all([
+      Campaign.findOne({ campaignsId: contract.campaignId }),
+      Brand.findOne({ brandId: contract.brandId }),
+      Influencer.findOne({ influencerId: contract.influencerId })
+    ]);
+    if (!campaign?.timeline || !brand || !influencer) {
+      return res.status(404).json({ message: 'Related data missing' });
+    }
+
+    const doc = new PDFDocument({ margin: 50 });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename=Contract-${contractId}.pdf`);
     doc.pipe(res);
 
-    doc.fontSize(20).text('INFLUENCER COLLABORATION AGREEMENT', { align: 'center' });
-    doc.moveDown();
+    // Logos
+    const logoSize = 50;
+    doc.image(brand.logoUrl, doc.page.margins.left, doc.page.margins.top, { width: logoSize });
+    doc.image(
+      influencer.logoUrl,
+      doc.page.width - doc.page.margins.right - logoSize,
+      doc.page.margins.top,
+      { width: logoSize }
+    );
+    doc.moveDown(4);
+
+    // Body (same as above)
+    doc.fontSize(20).text('INFLUENCER COLLABORATION AGREEMENT', { align: 'center' }).moveDown();
 
     doc.fontSize(12).text(`This Agreement is made on ${contract.effectiveDate} between:\n`);
-    doc.text(`1. Brand: ${contract.brandName}`);
-    doc.text(`   Address: ${contract.brandAddress}`);
-    doc.moveDown();
+    doc.text(`1. Brand:      ${contract.brandName}`);
+    doc.text(`   Address:    ${contract.brandAddress}`).moveDown();
     doc.text(`2. Influencer: ${contract.influencerName}`);
-    doc.text(`   Address: ${contract.influencerAddress}`);
-    doc.text(`   Handle: ${contract.influencerHandle}`);
-    doc.moveDown();
+    doc.text(`   Address:    ${contract.influencerAddress}`);
+    doc.text(`   Handle:     ${contract.influencerHandle}`).moveDown();
 
-    doc.text(`3. Scope of Work\n${contract.deliverableDescription}`);
-    doc.moveDown();
+    doc.text(`3. Scope of Work\n${contract.deliverableDescription}`).moveDown();
+    doc.text(`4. Compensation\nBrand agrees to pay Influencer $${contract.feeAmount}.`).moveDown();
+    doc.text(
+      `5. Term\nFrom ${new Date(campaign.timeline.startDate).toDateString()} to ${new Date(campaign.timeline.endDate).toDateString()}.`
+    ).moveDown();
 
-    doc.text(`4. Compensation\nBrand agrees to pay Influencer $${contract.feeAmount}.`);
-    doc.moveDown();
-
-    doc.text(`5. Term\nFrom ${new Date(contract.timeline.startDate).toDateString()} to ${new Date(contract.timeline.endDate).toDateString()}.`);
-    doc.moveDown();
-
-    doc.text('6. Signatures\n');
-    doc.moveDown();
-    doc.text('_____________________________\nBrand Representative');
-    doc.moveDown();
+    doc.text('6. Signatures\n').moveDown();
+    doc.text('_____________________________\nBrand Representative').moveDown();
     doc.text('_____________________________\nInfluencer');
 
     doc.end();
 
-  } catch (error) {
-    console.error('Error generating contract PDF:', error);
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error('Error generating contract PDF:', err);
+    res.status(500).json({ error: err.message });
   }
 };
 
@@ -207,22 +246,15 @@ exports.acceptContract = async (req, res) => {
     if (!contractId) {
       return res.status(400).json({ message: 'contractId is required' });
     }
-
     const contract = await Contract.findOne({ contractId });
     if (!contract) {
       return res.status(404).json({ message: 'Contract not found' });
     }
-
     contract.isAccepted = 1;
     await contract.save();
-
-    res.status(200).json({
-      message: 'Contract approved successfully',
-      contract
-    });
-
-  } catch (error) {
-    console.error('Error approving contract:', error);
-    res.status(500).json({ error: error.message });
+    res.status(200).json({ message: 'Contract approved successfully', contract });
+  } catch (err) {
+    console.error('Error approving contract:', err);
+    res.status(500).json({ error: err.message });
   }
 };

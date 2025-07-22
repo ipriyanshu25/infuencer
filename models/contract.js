@@ -1,3 +1,5 @@
+// models/contract.js
+
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 
@@ -7,6 +9,16 @@ const contractSchema = new mongoose.Schema({
     required: true,
     unique: true,
     default: uuidv4
+  },
+  brandId: {
+    type: String,
+    required: true,
+    ref: 'Brand'
+  },
+  influencerId: {
+    type: String,
+    required: true,
+    ref: 'Influencer'
   },
   campaignId: {
     type: String,
@@ -45,7 +57,6 @@ const contractSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  // removed `term` sub‐document (no longer used)
   timeline: {
     startDate: { type: Date },
     endDate:   { type: Date }

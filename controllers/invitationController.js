@@ -11,7 +11,7 @@ const Brand = require('../models/brand');
  */
 exports.createInvitation = async (req, res) => {
   try {
-    const { brandId, influencerId, campaignId, isAccepted = 0,isInvited=1} = req.body;
+    const { brandId, influencerId, campaignId, isAccepted = 0,isInvited=1 , isContracted=0} = req.body;
 
     // 1️⃣ Prevent duplicates
     const existing = await Invitation.findOne({ influencerId, campaignId });
@@ -36,6 +36,7 @@ exports.createInvitation = async (req, res) => {
       // new field:
       isInvited,
       isAccepted,
+      isContracted,
       campaign: {
         campaignsId:          campaign.campaignsId,
         brandName:            campaign.brandName,

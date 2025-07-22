@@ -147,6 +147,7 @@ exports.getListByCampaign = async (req, res) => {
       };
     });
 
+    
     // 8) Build pagination meta
     const totalPages     = Math.ceil(total / limit);
     const applicantCount = record.applicants.length;

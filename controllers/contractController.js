@@ -1,11 +1,10 @@
-// controllers/contractController.js
-
 const PDFDocument      = require('pdfkit');
 const Contract         = require('../models/contract');
 const Campaign         = require('../models/campaign');
 const Brand            = require('../models/brand');
 const Influencer       = require('../models/influencer');
 const ApplyCampaign    = require('../models/applyCampaign');
+const Invitation       = require('../models/invitation');
 
 exports.sendOrGenerateContract = async (req, res) => {
   try {
@@ -25,7 +24,7 @@ exports.sendOrGenerateContract = async (req, res) => {
     } = req.body;
 
     // 1) Validate
-    if (![0,1].includes(+type)) {
+    if (![0, 1].includes(+type)) {
       return res.status(400).json({ message: 'Invalid type; must be 0 (PDF) or 1 (save)' });
     }
     if (!brandId || !influencerId || !campaignId
@@ -44,17 +43,17 @@ exports.sendOrGenerateContract = async (req, res) => {
       Influencer.findOne({ influencerId })
     ]);
 
-    if (!campaign)      return res.status(404).json({ message: 'Campaign not found' });
-    if (!brand)         return res.status(404).json({ message: 'Brand not found' });
-    if (!influencer)    return res.status(404).json({ message: 'Influencer not found' });
+    if (!campaign)    return res.status(404).json({ message: 'Campaign not found' });
+    if (!brand)       return res.status(404).json({ message: 'Brand not found' });
+    if (!influencer)  return res.status(404).json({ message: 'Influencer not found' });
 
     // 3) Build payload
     const contractData = {
       brandId,
       influencerId,
       campaignId,
+      effectiveDate,
       brandName,
-      effectiveDate, 
       brandAddress,
       influencerName,
       influencerAddress,
@@ -76,32 +75,18 @@ exports.sendOrGenerateContract = async (req, res) => {
       res.setHeader('Content-Disposition', 'attachment; filename=Contract.pdf');
       doc.pipe(res);
 
-      // — Logos (only if defined) —
+      // Logos...
       const logoSize = 50;
       if (brand.logoUrl) {
         try {
-          doc.image(
-            brand.logoUrl,
-            doc.page.margins.left,
-            doc.page.margins.top,
-            { width: logoSize }
-          );
-        } catch (err) {
-          console.warn('Could not load brand logo:', err.message);
-        }
+          doc.image(brand.logoUrl, doc.page.margins.left, doc.page.margins.top, { width: logoSize });
+        } catch (err) { console.warn('Brand logo failed:', err.message); }
       }
       if (influencer.logoUrl) {
         try {
           const x = doc.page.width - doc.page.margins.right - logoSize;
-          doc.image(
-            influencer.logoUrl,
-            x,
-            doc.page.margins.top,
-            { width: logoSize }
-          );
-        } catch (err) {
-          console.warn('Could not load influencer logo:', err.message);
-        }
+          doc.image(influencer.logoUrl, x, doc.page.margins.top, { width: logoSize });
+        } catch (err) { console.warn('Influencer logo failed:', err.message); }
       }
       doc.moveDown(4);
 
@@ -157,7 +142,7 @@ exports.sendOrGenerateContract = async (req, res) => {
     const newContract = new Contract(contractData);
     await newContract.save();
 
-    // 6) Mark approved
+    // 6) Mark approved in ApplyCampaign
     let appRec = await ApplyCampaign.findOne({ campaignId });
     if (!appRec) {
       appRec = new ApplyCampaign({
@@ -170,7 +155,14 @@ exports.sendOrGenerateContract = async (req, res) => {
     }
     await appRec.save();
 
-    // 7) Respond
+    // 7) ALSO update the matching Invitation → isContracted = 1
+    await Invitation.findOneAndUpdate(
+      { campaignId, influencerId },
+      { isContracted: 1 },
+      { new: true }
+    );
+
+    // 8) Respond
     return res.status(201).json({
       message:  'Contract created and saved successfully',
       contract: newContract
@@ -178,7 +170,7 @@ exports.sendOrGenerateContract = async (req, res) => {
 
   } catch (err) {
     console.error('Error in sendOrGenerateContract:', err);
-    res.status(500).json({ message: 'Internal server error' });
+    return res.status(500).json({ message: 'Internal server error' });
   }
 };
 

@@ -1,6 +1,7 @@
 const Invitation = require('../models/invitation');
-const Brand = require('../models/brand');
-const Campaign = require('../models/campaign');
+const ApplyCampaing = require('../models/applyCampaign');
+const Campaign      = require('../models/campaign');
+const Influencer    = require('../models/influencer');
 
 /**
  * Create a new Invitation
@@ -123,29 +124,76 @@ exports.getInvitations = async (req, res) => {
  * Body: { influencerId, campaignId }
  */
 exports.acceptInvitation = async (req, res) => {
-  try {
-    const { invitationId } = req.body;
+  const { invitationId } = req.body;
+  if (!invitationId) {
+    return res.status(400).json({ message: 'invitationId is required' });
+  }
 
-    // Find invitation by its ID
+  try {
+    // 1️⃣ Find the invitation
     const invitation = await Invitation.findOne({ invitationId });
     if (!invitation) {
       return res.status(404).json({ message: 'Invitation not found' });
     }
 
-    // If already accepted, short-circuit
+    // 2️⃣ Prevent re-accept
     if (invitation.isAccepted === 1) {
       return res.status(400).json({ message: 'Invitation already accepted' });
     }
 
-    // Otherwise mark accepted and save
+    // 3️⃣ Mark accepted
     invitation.isAccepted = 1;
     await invitation.save();
 
-    res.json(invitation);
+    // ── Mirror applyToCampaign logic ─────────────────────────────
+    const { campaignId, influencerId } = invitation;
+
+    // 0) Load influencer & quota feature
+    const inf = await Influencer.findOne({ influencerId });
+    if (!inf) {
+      // Log but continue: accept still successful
+      console.warn(`Influencer ${influencerId} not found when applying.`);
+    } else {
+      const applyFeature = inf.subscription.features.find(f => f.key === 'apply_to_campaigns_quota');
+      if (applyFeature && (applyFeature.limit === 0 || applyFeature.used < applyFeature.limit)) {
+        // bump usage
+        applyFeature.used += 1;
+        await inf.save();
+
+        // record the application
+        let record = await ApplyCampaing.findOne({ campaignId });
+        const name = inf.name;
+        if (!record) {
+          record = new ApplyCampaing({
+            campaignId,
+            applicants: [{ influencerId, name }]
+          });
+        } else if (!record.applicants.some(a => a.influencerId === influencerId)) {
+          record.applicants.push({ influencerId, name });
+        }
+        await record.save();
+
+        // sync applicantCount back to Campaign
+        const applicantCount = record.applicants.length;
+        await Campaign.findOneAndUpdate(
+          { campaignsId: campaignId },
+          { applicantCount }
+        );
+      }
+    }
+
+    // 4️⃣ Respond with updated invitation
+    return res.status(200).json({
+      message: 'Invitation accepted and application recorded',
+      invitation
+    });
+
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error('Error in acceptInvitation:', err);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
 
 exports.getActiveCampaigns = async (req, res) => {
   try {

@@ -22,6 +22,6 @@ router.post('/getMilestome',getMilestonesByInfluencerAndCampaign);
 
 router.post('/byInfluencer',getMilestonesByInfluencer);
 
-router.post('/byBrand', controller.getMilestonesByBrand);
+router.post('/byBrand', getMilestonesByBrand);
 
 module.exports = router;

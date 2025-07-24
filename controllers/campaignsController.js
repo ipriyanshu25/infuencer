@@ -584,14 +584,17 @@ exports.checkApplied = async (req, res) => {
     });
 
     // attach flag
-    campaign.isApplied = applied ? 1 : 0;
-    return res.json(campaign);
+    campaign.hasApplied = applied ? 1 : 0;   // ← renamed
+    // (optional) delete campaign.isApplied if you want to remove the old field:
+    // delete campaign.isApplied;
 
+    return res.json(campaign);
   } catch (err) {
     console.error('Error in checkApplied:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
 
 // controllers/influencerController.js
 exports.getCampaignsByInfluencer = async (req, res) => {
@@ -620,9 +623,8 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     // 2) Build campaign filter → interestId in categories, active only
     const filter = {
       interestId: { $in: categories },
-      isActive: 1
+      isActive:   1
     };
-
     if (search?.trim()) {
       const term = search.trim();
       const or = [
@@ -634,12 +636,12 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       filter.$or = or;
     }
 
-    // 3) Pagination
-    const pageNum = Math.max(1, parseInt(page, 10));
+    // 3) Pagination math
+    const pageNum = Math.max(1, parseInt(page,  10));
     const limNum  = Math.max(1, parseInt(limit, 10));
     const skip    = (pageNum - 1) * limNum;
 
-    // 4) Fetch campaigns + total
+    // 4) Fetch total & page of campaigns
     const [ total, campaigns ] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
@@ -649,7 +651,7 @@ exports.getCampaignsByInfluencer = async (req, res) => {
         .lean()
     ]);
 
-    // 5) Gather ApplyCampaign records
+    // 5) Gather ApplyCampaign records for these campaigns
     const campaignIds = campaigns.map(c => c.campaignId);
     const applyRecs = await ApplyCampaign.find({
       campaignId: { $in: campaignIds }
@@ -658,21 +660,19 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     const appliedSet = new Set();
     const approvedMap = new Map();
     applyRecs.forEach(r => {
-      // mark if this influencer applied
       if (Array.isArray(r.applicants) &&
           r.applicants.some(a => a.influencerId === influencerId)) {
         appliedSet.add(r.campaignId);
       }
-      // track first approved influencer if any
       if (Array.isArray(r.approved) && r.approved.length) {
         approvedMap.set(r.campaignId, r.approved[0].influencerId);
       }
     });
 
-    // 6) Gather Contract records
+    // 6) Gather Contract records for this influencer
     const contractRecs = await Contract.find({
       campaignId:   { $in: campaignIds },
-      influencerId            // only this influencer
+      influencerId
     }, 'campaignId contractId isAccepted').lean();
 
     const contractMap = new Map();
@@ -682,7 +682,7 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       acceptedMap.set(c.campaignId, c.isAccepted === 1 ? 1 : 0);
     });
 
-    // 7) Annotate
+    // 7) Annotate each campaign
     const annotated = campaigns.map(c => {
       const cid = c.campaignId;
       return {
@@ -695,15 +695,22 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       };
     });
 
-    // 8) Return
+    // 8) Filter OUT campaigns they’ve already applied to
+    const unapplied = annotated.filter(c => c.hasApplied === 0);
+
+    // 9) Recompute pagination meta for the filtered list
+    const totalUnapplied     = unapplied.length;
+    const totalPagesUnapplied = Math.ceil(totalUnapplied / limNum);
+
+    // 10) Return only the unapplied campaigns
     return res.json({
       meta: {
-        total,
+        total:      totalUnapplied,
         page:       pageNum,
         limit:      limNum,
-        totalPages: Math.ceil(total / limNum)
+        totalPages: totalPagesUnapplied
       },
-      campaigns: annotated
+      campaigns: unapplied
     });
 
   } catch (err) {

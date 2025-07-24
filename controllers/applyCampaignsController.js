@@ -1,9 +1,9 @@
 // controllers/applyCampaingsController.js
 
 const ApplyCampaing = require('../models/applyCampaign');
-const Campaign      = require('../models/campaign');
-const Influencer    = require('../models/influencer');
-const Contract = require('../models/contract'); 
+const Campaign = require('../models/campaign');
+const Influencer = require('../models/influencer');
+const Contract = require('../models/contract');
 
 
 exports.applyToCampaign = async (req, res) => {
@@ -64,10 +64,11 @@ exports.applyToCampaign = async (req, res) => {
 
     // ── 3) respond with remaining quota ───────────────────────────
     return res.status(200).json({
-      message:                'Application recorded',
+      message: 'Application recorded',
       campaignId,
       applicantCount,
-      applicationsRemaining:  applyFeature.limit - applyFeature.used
+      applicationsRemaining: applyFeature.limit - applyFeature.used,
+      hasApplied: 1        // ← new flag
     });
 
   } catch (err) {
@@ -98,12 +99,12 @@ exports.getListByCampaign = async (req, res) => {
     const record = await ApplyCampaing.findOne({ campaignId });
     if (!record) {
       return res.status(200).json({
-        meta:               { total: 0, page, limit, totalPages: 0 },
-        applicantCount:     0,
+        meta: { total: 0, page, limit, totalPages: 0 },
+        applicantCount: 0,
         isAccepted: 0,
-        isContracted:       0,
-        contractId:         null,
-        influencers:        []
+        isContracted: 0,
+        contractId: null,
+        influencers: []
       });
     }
 
@@ -132,8 +133,8 @@ exports.getListByCampaign = async (req, res) => {
 
     // 6) Lookup the single Contract for this campaign (if any)
     const contract = await Contract.findOne({ campaignId }).lean();
-    const isContracted       = contract ? 1 : 0;
-    const contractId         = contract ? contract.contractId : null;
+    const isContracted = contract ? 1 : 0;
+    const contractId = contract ? contract.contractId : null;
     const isAccepted = contract && contract.isAccepted === 1 ? 1 : 0;
 
     // 7) Annotate each influencer
@@ -147,24 +148,24 @@ exports.getListByCampaign = async (req, res) => {
       };
     });
 
-    
+
     // 8) Build pagination meta
-    const totalPages     = Math.ceil(total / limit);
+    const totalPages = Math.ceil(total / limit);
     const applicantCount = record.applicants.length;
 
     // 9) Return response
     return res.status(200).json({
       meta: {
         total,
-        page:               Number(page),
-        limit:              Number(limit),
+        page: Number(page),
+        limit: Number(limit),
         totalPages
       },
       applicantCount,
       isAccepted,
       isContracted,
       contractId,
-      influencers:        annotated
+      influencers: annotated
     });
   } catch (err) {
     console.error('Error in getListByCampaign:', err);

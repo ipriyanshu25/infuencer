@@ -1,7 +1,7 @@
 // controllers/milestoneController.js
 
 const Milestone = require('../models/milestone');
-const Campaign  = require('../models/campaign');
+const Campaign = require('../models/campaign');
 
 // POST /milestone/create
 // body: { brandId, influencerId, campaignId, milestoneTitle, amount, milestoneDescription }
@@ -14,6 +14,14 @@ exports.createMilestone = async (req, res) => {
     amount,
     milestoneDescription = ''
   } = req.body;
+
+  // 0) Coerce and validate amount
+  const amountNum = Number(amount);
+  if (isNaN(amountNum)) {
+    return res.status(400).json({
+      message: 'amount must be a valid number'
+    });
+  }
 
   if (!brandId || !influencerId || !campaignId || !milestoneTitle || amount == null) {
     return res.status(400).json({
@@ -34,18 +42,18 @@ exports.createMilestone = async (req, res) => {
       doc = new Milestone({ brandId });
     }
 
-    // 3) Append a new history entry
+    // 3) Append a new history entry (using numeric amount)
     const entry = {
       influencerId,
       campaignId,
       milestoneTitle,
-      amount,
+      amount: amountNum,
       milestoneDescription
     };
     doc.milestoneHistory.push(entry);
 
     // 4) Update walletBalance
-    doc.walletBalance = (doc.walletBalance || 0) + amount;
+    doc.walletBalance = (doc.walletBalance || 0) + amountNum;
 
     // 5) Save
     await doc.save();
@@ -61,7 +69,7 @@ exports.createMilestone = async (req, res) => {
   }
 };
 
-// POST /milestone/list
+// POST /milestone/listByCampaign
 // body: { campaignId }
 exports.getMilestonesByCampaign = async (req, res) => {
   const { campaignId } = req.body;
@@ -70,27 +78,124 @@ exports.getMilestonesByCampaign = async (req, res) => {
   }
 
   try {
-    // 1) Find all brand docs that have history for this campaign
     const docs = await Milestone.find({ 'milestoneHistory.campaignId': campaignId }).lean();
 
-    // 2) Extract and flatten only the entries for campaignId
     const entries = docs.flatMap(doc =>
       doc.milestoneHistory
         .filter(e => e.campaignId === campaignId)
         .map(e => ({
           ...e,
           brandId: doc.brandId,
-          // optionally include the brand’s walletBalance at time of fetch:
           walletBalance: doc.walletBalance
         }))
     );
 
     return res.status(200).json({
-      message: 'Milestones fetched',
+      message: 'Milestones fetched by campaign',
       milestones: entries
     });
   } catch (err) {
     console.error('Error in getMilestonesByCampaign:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+// POST /milestone/listByInfluencerAndCampaign
+// body: { influencerId, campaignId }
+exports.getMilestonesByInfluencerAndCampaign = async (req, res) => {
+  const { influencerId, campaignId } = req.body;
+  if (!influencerId || !campaignId) {
+    return res.status(400).json({ message: 'influencerId and campaignId are required' });
+  }
+
+  try {
+    const docs = await Milestone.find({
+      'milestoneHistory.influencerId': influencerId,
+      'milestoneHistory.campaignId': campaignId
+    }).lean();
+
+    const entries = docs.flatMap(doc =>
+      doc.milestoneHistory
+        .filter(e => e.influencerId === influencerId && e.campaignId === campaignId)
+        .map(e => ({
+          ...e,
+          brandId: doc.brandId,
+          walletBalance: doc.walletBalance
+        }))
+    );
+
+    return res.status(200).json({
+      message: 'Milestones fetched by influencer and campaign',
+      milestones: entries
+    });
+  } catch (err) {
+    console.error('Error in getMilestonesByInfluencerAndCampaign:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+// POST /milestone/listByInfluencer
+// body: { influencerId }
+exports.getMilestonesByInfluencer = async (req, res) => {
+  const { influencerId } = req.body;
+  if (!influencerId) {
+    return res.status(400).json({ message: 'influencerId is required' });
+  }
+
+  try {
+    const docs = await Milestone.find({ 'milestoneHistory.influencerId': influencerId }).lean();
+
+    const entries = docs.flatMap(doc =>
+      doc.milestoneHistory
+        .filter(e => e.influencerId === influencerId)
+        .map(e => ({
+          ...e,
+          brandId: doc.brandId,
+          walletBalance: doc.walletBalance
+        }))
+    );
+
+    return res.status(200).json({
+      message: 'Milestones fetched by influencer',
+      milestones: entries
+    });
+  } catch (err) {
+    console.error('Error in getMilestonesByInfluencer:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+exports.getMilestonesByBrand = async (req, res) => {
+  const { brandId } = req.body;
+  if (!brandId) {
+    return res.status(400).json({ message: 'brandId is required' });
+  }
+
+  try {
+    // 1) Load the brand’s Milestone doc
+    const doc = await Milestone.findOne({ brandId }).lean();
+
+    // 2) If none, return empty list
+    if (!doc) {
+      return res.status(200).json({
+        message: 'No milestones found for this brand',
+        milestones: []
+      });
+    }
+
+    // 3) Flatten all history entries, tagging each with brandId and current balance
+    const entries = doc.milestoneHistory.map(e => ({
+      ...e,
+      brandId: doc.brandId,
+      walletBalance: doc.walletBalance
+    }));
+
+    return res.status(200).json({
+      message: 'Milestones fetched by brand',
+      milestones: entries
+    });
+  } catch (err) {
+    console.error('Error in getMilestonesByBrand:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };

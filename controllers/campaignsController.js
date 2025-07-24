@@ -585,8 +585,7 @@ exports.checkApplied = async (req, res) => {
 
     // attach flag
     campaign.hasApplied = applied ? 1 : 0;   // ← renamed
-    // (optional) delete campaign.isApplied if you want to remove the old field:
-    // delete campaign.isApplied;
+    
 
     return res.json(campaign);
   } catch (err) {
@@ -605,25 +604,24 @@ exports.getCampaignsByInfluencer = async (req, res) => {
 
   try {
     // 1) Load influencer → get categories[]
-    const inf = await Influencer.findOne(
-      { influencerId },
-      'categories'
-    ).lean();
+    const inf = await Influencer.findOne({ influencerId }, 'categories').lean();
     if (!inf) {
       return res.status(404).json({ message: 'Influencer not found' });
     }
+
     const categories = inf.categories || [];
-    if (!categories.length) {
+    if (categories.length === 0) {
       return res.json({
         meta: { total: 0, page: Number(page), limit: Number(limit), totalPages: 0 },
         campaigns: []
       });
     }
 
-    // 2) Build campaign filter → interestId in categories, active only
+    // 2) Build filter → interestId in categories, active only, not yet applied
     const filter = {
       interestId: { $in: categories },
-      isActive:   1
+      isActive:   1,
+      hasApplied: 0     // ← only campaigns where no one (this influencer) has applied
     };
     if (search?.trim()) {
       const term = search.trim();
@@ -641,7 +639,7 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     const limNum  = Math.max(1, parseInt(limit, 10));
     const skip    = (pageNum - 1) * limNum;
 
-    // 4) Fetch total & page of campaigns
+    // 4) Count & fetch only unapplied campaigns
     const [ total, campaigns ] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
@@ -651,25 +649,8 @@ exports.getCampaignsByInfluencer = async (req, res) => {
         .lean()
     ]);
 
-    // 5) Gather ApplyCampaign records for these campaigns
+    // 5) (Optional) Fetch contract info for annotation
     const campaignIds = campaigns.map(c => c.campaignId);
-    const applyRecs = await ApplyCampaign.find({
-      campaignId: { $in: campaignIds }
-    }).lean();
-
-    const appliedSet = new Set();
-    const approvedMap = new Map();
-    applyRecs.forEach(r => {
-      if (Array.isArray(r.applicants) &&
-          r.applicants.some(a => a.influencerId === influencerId)) {
-        appliedSet.add(r.campaignId);
-      }
-      if (Array.isArray(r.approved) && r.approved.length) {
-        approvedMap.set(r.campaignId, r.approved[0].influencerId);
-      }
-    });
-
-    // 6) Gather Contract records for this influencer
     const contractRecs = await Contract.find({
       campaignId:   { $in: campaignIds },
       influencerId
@@ -682,35 +663,31 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       acceptedMap.set(c.campaignId, c.isAccepted === 1 ? 1 : 0);
     });
 
-    // 7) Annotate each campaign
+    // 6) Annotate each campaign
     const annotated = campaigns.map(c => {
       const cid = c.campaignId;
       return {
         ...c,
-        hasApplied:   appliedSet.has(cid) ? 1 : 0,
-        hasApproved:  approvedMap.has(cid) ? 1 : 0,
+        hasApplied:   0,                           // guaranteed by the filter
+        hasApproved:  0,                           // fill in if you implement approvals
         isContracted: contractMap.has(cid) ? 1 : 0,
         contractId:   contractMap.get(cid) || null,
         isAccepted:   acceptedMap.get(cid) || 0
       };
     });
 
-    // 8) Filter OUT campaigns they’ve already applied to
-    const unapplied = annotated.filter(c => c.hasApplied === 0);
+    // 7) Build pagination meta
+    const totalPages = Math.ceil(total / limNum);
 
-    // 9) Recompute pagination meta for the filtered list
-    const totalUnapplied     = unapplied.length;
-    const totalPagesUnapplied = Math.ceil(totalUnapplied / limNum);
-
-    // 10) Return only the unapplied campaigns
+    // 8) Return
     return res.json({
       meta: {
-        total:      totalUnapplied,
+        total,
         page:       pageNum,
         limit:      limNum,
-        totalPages: totalPagesUnapplied
+        totalPages
       },
-      campaigns: unapplied
+      campaigns: annotated
     });
 
   } catch (err) {

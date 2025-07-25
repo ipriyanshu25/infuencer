@@ -784,3 +784,66 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+exports.getAppliedCampaignsByInfluencer = async (req, res) => {
+  const { influencerId, search, page = 1, limit = 10 } = req.body;
+  if (!influencerId) {
+    return res.status(400).json({ message: 'influencerId is required' });
+  }
+
+  try {
+    // 1) Find all apply‐records for this influencer
+    const applyRecs = await ApplyCampaign
+      .find({ 'applicants.influencerId': influencerId }, 'campaignId')
+      .lean();
+
+    const campaignIds = applyRecs.map(r => r.campaignId);
+    if (campaignIds.length === 0) {
+      return res.json({
+        meta: { total: 0, page: Number(page), limit: Number(limit), totalPages: 0 },
+        campaigns: []
+      });
+    }
+
+    // 2) Build campaign filter by those IDs
+    const filter = { campaignsId: { $in: campaignIds } };
+
+    // 3) Optional text/number search on brandName, productOrServiceName or budget ceiling
+    if (search?.trim()) {
+      const term = search.trim();
+      const or = [
+        { brandName:            { $regex: term, $options: 'i' } },
+        { productOrServiceName: { $regex: term, $options: 'i' } }
+      ];
+      const num = Number(term);
+      if (!isNaN(num)) or.push({ budget: { $lte: num } });
+      filter.$or = or;
+    }
+
+    // 4) Pagination math
+    const pageNum = Math.max(1, parseInt(page, 10));
+    const limNum  = Math.max(1, parseInt(limit, 10));
+    const skip    = (pageNum - 1) * limNum;
+
+    // 5) Fetch total & paged campaigns
+    const [ total, campaigns ] = await Promise.all([
+      Campaign.countDocuments(filter),
+      Campaign.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limNum)
+        .lean()
+    ]);
+
+    const totalPages = Math.ceil(total / limNum);
+    return res.json({
+      meta: { total, page: pageNum, limit: limNum, totalPages },
+      campaigns
+    });
+
+  } catch (err) {
+    console.error('Error in getAppliedCampaignsByInfluencer:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};

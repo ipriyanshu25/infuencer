@@ -62,6 +62,7 @@ router.post(
 router.post('/checkApplied', brandController.verifyToken, campaignController.checkApplied);
 router.post('/byInfluencer', brandController.verifyToken, campaignController.getCampaignsByInfluencer);
 router.post('/myCampaign', brandController.verifyToken, campaignController.getApprovedCampaignsByInfluencer);
+router.post('/applied', campaignController.getAppliedCampaignsByInfluencer);
 
 
 module.exports = router;

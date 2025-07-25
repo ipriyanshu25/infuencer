@@ -65,4 +65,10 @@ router.post('/myCampaign', brandController.verifyToken, campaignController.getAp
 router.post('/applied', campaignController.getAppliedCampaignsByInfluencer);
 
 
+router.post('/accepted', campaignController.getAcceptedCampaigns);
+
+// POST /campaign/accepted-influencers → get accepted influencers for a Campaign
+router.post('/accepted-inf', campaignController.getAcceptedInfluencers);
+
+
 module.exports = router;

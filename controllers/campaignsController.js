@@ -847,3 +847,151 @@ exports.getAppliedCampaignsByInfluencer = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+// ===============================
+//  GET ACCEPTED CAMPAIGNS (Brand)
+//      • POST  /campaign/accepted
+//      • Body: { brandId, search?, page?, limit? }
+// ===============================
+exports.getAcceptedCampaigns = async (req, res) => {
+  const { brandId, search, page = 1, limit = 10 } = req.body;
+  if (!brandId) {
+    return res.status(400).json({ message: 'brandId is required' });
+  }
+
+  try {
+    // 1) All contracts that belong to this brand AND have been accepted
+    const contracts = await Contract.find(
+      { brandId, isAccepted: 1 },
+      'campaignId contractId influencerId feeAmount'
+    ).lean();
+
+    const campaignIds = contracts.map(c => c.campaignId);
+    if (campaignIds.length === 0) {
+      return res.status(200).json({
+        meta: { total: 0, page, limit, totalPages: 0 },
+        campaigns: []
+      });
+    }
+
+    // 2) Build helper maps for easy annotation later
+    const contractMap  = new Map();   // campaignId → contractId
+    const influencerMap = new Map();  // campaignId → influencerId
+    const feeMap        = new Map();  // campaignId → feeAmount
+    contracts.forEach(c => {
+      contractMap.set(c.campaignId,  c.contractId);
+      influencerMap.set(c.campaignId, c.influencerId);
+      feeMap.set(c.campaignId,        c.feeAmount);
+    });
+
+    // 3) Compose campaign query
+    const filter = { campaignsId: { $in: campaignIds } };
+    if (search?.trim()) {
+      const term = search.trim();
+      const or = [
+        { brandName:            { $regex: term, $options: 'i' } },
+        { productOrServiceName: { $regex: term, $options: 'i' } }
+      ];
+      const num = Number(term);
+      if (!isNaN(num)) or.push({ budget: { $lte: num } });
+      filter.$or = or;
+    }
+
+    // 4) Pagination
+    const pageNum = Math.max(1, parseInt(page, 10));
+    const limNum  = Math.max(1, parseInt(limit, 10));
+    const skip    = (pageNum - 1) * limNum;
+
+    // 5) Fetch
+    const [ total, campaigns ] = await Promise.all([
+      Campaign.countDocuments(filter),
+      Campaign.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limNum)
+        .populate('interestId', 'name')
+        .lean()
+    ]);
+
+    // 6) Annotate
+    const annotated = campaigns.map(c => {
+      const cid = c.campaignsId;
+      return {
+        ...c,
+        contractId:   contractMap.get(cid),
+        influencerId: influencerMap.get(cid),
+        feeAmount:    feeMap.get(cid),
+        isAccepted:   1               // by definition
+      };
+    });
+
+    // 7) Respond
+    return res.json({
+      meta: {
+        total,
+        page:       pageNum,
+        limit:      limNum,
+        totalPages: Math.ceil(total / limNum)
+      },
+      campaigns: annotated
+    });
+
+  } catch (err) {
+    console.error('Error in getAcceptedCampaigns:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+// ===============================
+//  GET ACCEPTED INFLUENCERS (per Campaign)
+//      • POST /campaign/accepted-influencers
+//      • Body: { campaignId }
+// ===============================
+exports.getAcceptedInfluencers = async (req, res) => {
+  const { campaignId } = req.body;
+  if (!campaignId) {
+    return res.status(400).json({ message: 'campaignId is required' });
+  }
+
+  try {
+    // 1) All accepted contracts for this campaign
+    const contracts = await Contract.find(
+      { campaignId, isAccepted: 1 },
+      'influencerId contractId feeAmount'
+    ).lean();
+
+    const influencerIds = contracts.map(c => c.influencerId);
+    if (influencerIds.length === 0) {
+      return res.status(200).json({ influencers: [] });
+    }
+
+    // 2) Build helper maps
+    const contractMap = new Map();  // influencerId → contractId
+    const feeMap      = new Map();  // influencerId → feeAmount
+    contracts.forEach(c => {
+      contractMap.set(c.influencerId, c.contractId);
+      feeMap.set(c.influencerId,      c.feeAmount);
+    });
+
+    // 3) Fetch influencer profiles
+    const influencers = await Influencer.find(
+      { influencerId: { $in: influencerIds } },
+      '-passwordHash -__v'            // omit sensitive fields as needed
+    ).lean();
+
+    // 4) Attach contract info
+    const annotated = influencers.map(i => ({
+      ...i,
+      contractId: contractMap.get(i.influencerId),
+      feeAmount:  feeMap.get(i.influencerId),
+      isAccepted: 1
+    }));
+
+    return res.json({ influencers: annotated });
+
+  } catch (err) {
+    console.error('Error in getAcceptedInfluencers:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};

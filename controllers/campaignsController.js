@@ -995,3 +995,95 @@ exports.getAcceptedInfluencers = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+
+exports.getContractedCampaignsByInfluencer = async (req, res) => {
+  const { influencerId, search, page = 1, limit = 10 } = req.body;
+  if (!influencerId) {
+    return res.status(400).json({ message: 'influencerId is required' });
+  }
+
+  try {
+    /* 1) All contracts for this influencer that have been issued
+          (isAssigned === 1   ⇒   “isContracted” in the UI layer) */
+    const contracts = await Contract.find(
+      { influencerId, isAssigned: 1 },
+      'campaignId contractId isAccepted feeAmount'
+    ).lean();
+
+    const campaignIds = contracts.map(c => c.campaignId);
+    if (campaignIds.length === 0) {
+      return res.status(200).json({
+        meta: { total: 0, page, limit, totalPages: 0 },
+        campaigns: []
+      });
+    }
+
+    /* 2) Helper maps for quick look‑ups */
+    const contractIdMap = new Map();
+    const acceptedMap   = new Map();
+    const feeMap        = new Map();
+    contracts.forEach(c => {
+      contractIdMap.set(c.campaignId, c.contractId);
+      acceptedMap.set(c.campaignId,  c.isAccepted === 1 ? 1 : 0);
+      feeMap.set(c.campaignId,       c.feeAmount);
+    });
+
+    /* 3) Compose campaign filter */
+    const filter = { campaignsId: { $in: campaignIds } };
+    if (search?.trim()) {
+      const term = search.trim();
+      const or = [
+        { brandName:            { $regex: term, $options: 'i' } },
+        { productOrServiceName: { $regex: term, $options: 'i' } }
+      ];
+      const num = Number(term);
+      if (!isNaN(num)) or.push({ budget: { $lte: num } });
+      filter.$or = or;
+    }
+
+    /* 4) Pagination */
+    const pageNum = Math.max(1, parseInt(page, 10));
+    const limNum  = Math.max(1, parseInt(limit, 10));
+    const skip    = (pageNum - 1) * limNum;
+
+    /* 5) Fetch campaigns */
+    const [ total, campaigns ] = await Promise.all([
+      Campaign.countDocuments(filter),
+      Campaign.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limNum)
+        .populate('interestId', 'name')
+        .lean()
+    ]);
+
+    /* 6) Annotate with contract info */
+    const annotated = campaigns.map(c => {
+      const cid = c.campaignsId;
+      return {
+        ...c,
+        contractId: contractIdMap.get(cid),
+        feeAmount:  feeMap.get(cid),
+        isContracted: 1,
+        isAccepted: acceptedMap.get(cid)          // 1 or 0
+      };
+    });
+
+    /* 7) Respond */
+    return res.json({
+      meta: {
+        total,
+        page:       pageNum,
+        limit:      limNum,
+        totalPages: Math.ceil(total / limNum)
+      },
+      campaigns: annotated
+    });
+
+  } catch (err) {
+    console.error('Error in getContractedCampaignsByInfluencer:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};

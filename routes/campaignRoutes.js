@@ -70,5 +70,7 @@ router.post('/accepted', campaignController.getAcceptedCampaigns);
 // POST /campaign/accepted-influencers → get accepted influencers for a Campaign
 router.post('/accepted-inf', campaignController.getAcceptedInfluencers);
 
+router.post('/contracted', campaignController.getContractedCampaignsByInfluencer);
+
 
 module.exports = router;

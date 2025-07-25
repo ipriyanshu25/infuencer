@@ -1138,14 +1138,16 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
   }
 
   try {
-    /* 1) All contracts for this influencer that have been issued
-          (isAssigned === 1   ⇒   “isContracted” in the UI layer) */
+    /* -------------------------------------------------------------
+       1) All *un‑accepted* contracts for this influencer
+          (isAssigned === 1 && isAccepted !== 1)
+    ------------------------------------------------------------- */
     const contracts = await Contract.find(
-      { influencerId, isAssigned: 1 },
-      'campaignId contractId isAccepted feeAmount'
+      { influencerId, isAssigned: 1, isAccepted: { $ne: 1 } },
+      'campaignId contractId feeAmount'
     ).lean();
 
-    const campaignIds = contracts.map(c => c.campaignId);
+    let campaignIds = contracts.map(c => c.campaignId);
     if (campaignIds.length === 0) {
       return res.status(200).json({
         meta: { total: 0, page, limit, totalPages: 0 },
@@ -1153,18 +1155,45 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
       });
     }
 
-    /* 2) Helper maps for quick look‑ups */
+    /* -------------------------------------------------------------
+       2) Intersect with campaigns the influencer has *applied* to
+          (hasApplied == 1)
+    ------------------------------------------------------------- */
+    const appliedRecs = await ApplyCampaign.find(
+      {
+        campaignId: { $in: campaignIds },
+        'applicants.influencerId': influencerId
+      },
+      'campaignId'
+    ).lean();
+
+    const appliedIdsSet = new Set(appliedRecs.map(r => r.campaignId));
+    campaignIds = campaignIds.filter(id => appliedIdsSet.has(id));
+
+    if (campaignIds.length === 0) {
+      return res.status(200).json({
+        meta: { total: 0, page, limit, totalPages: 0 },
+        campaigns: []
+      });
+    }
+
+    /* -------------------------------------------------------------
+       3) Helper maps for annotation
+    ------------------------------------------------------------- */
     const contractIdMap = new Map();
-    const acceptedMap   = new Map();
     const feeMap        = new Map();
     contracts.forEach(c => {
-      contractIdMap.set(c.campaignId, c.contractId);
-      acceptedMap.set(c.campaignId,  c.isAccepted === 1 ? 1 : 0);
-      feeMap.set(c.campaignId,       c.feeAmount);
+      if (appliedIdsSet.has(c.campaignId)) { // only keep those still in set
+        contractIdMap.set(c.campaignId, c.contractId);
+        feeMap.set(c.campaignId,        c.feeAmount);
+      }
     });
 
-    /* 3) Compose campaign filter */
+    /* -------------------------------------------------------------
+       4) Compose campaign filter (search + ids)
+    ------------------------------------------------------------- */
     const filter = { campaignsId: { $in: campaignIds } };
+
     if (search?.trim()) {
       const term = search.trim();
       const or = [
@@ -1176,13 +1205,17 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
       filter.$or = or;
     }
 
-    /* 4) Pagination */
+    /* -------------------------------------------------------------
+       5) Pagination
+    ------------------------------------------------------------- */
     const pageNum = Math.max(1, parseInt(page, 10));
     const limNum  = Math.max(1, parseInt(limit, 10));
     const skip    = (pageNum - 1) * limNum;
 
-    /* 5) Fetch campaigns */
-    const [ total, campaigns ] = await Promise.all([
+    /* -------------------------------------------------------------
+       6) Fetch campaigns
+    ------------------------------------------------------------- */
+    const [ total, rawCampaigns ] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
         .sort({ createdAt: -1 })
@@ -1192,19 +1225,21 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
         .lean()
     ]);
 
-    /* 6) Annotate with contract info */
-    const annotated = campaigns.map(c => {
-      const cid = c.campaignsId;
-      return {
-        ...c,
-        contractId: contractIdMap.get(cid),
-        feeAmount:  feeMap.get(cid),
-        isContracted: 1,
-        isAccepted: acceptedMap.get(cid)          // 1 or 0
-      };
-    });
+    /* -------------------------------------------------------------
+       7) Annotate with required flags
+    ------------------------------------------------------------- */
+    const campaigns = rawCampaigns.map(c => ({
+      ...c,
+      hasApplied:   1,
+      isContracted: 1,
+      isAccepted:   0,
+      contractId:   contractIdMap.get(c.campaignsId),
+      feeAmount:    feeMap.get(c.campaignsId)
+    }));
 
-    /* 7) Respond */
+    /* -------------------------------------------------------------
+       8) Respond
+    ------------------------------------------------------------- */
     return res.json({
       meta: {
         total,
@@ -1212,7 +1247,7 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
         limit:      limNum,
         totalPages: Math.ceil(total / limNum)
       },
-      campaigns: annotated
+      campaigns
     });
 
   } catch (err) {

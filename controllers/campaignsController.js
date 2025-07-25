@@ -704,15 +704,15 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
   }
 
   try {
-    // 1) Fetch all contracts where this influencer is assigned
-    const contractRecs = await Contract.find({
-      influencerId,
-      isAssigned: 1
-    })
-      .select('campaignId contractId isAccepted')
-      .lean();
+    /* ------------------------------------------------------------------
+       1) Contracts that are BOTH assigned and accepted
+    ------------------------------------------------------------------ */
+    const contracts = await Contract.find(
+      { influencerId, isAssigned: 1, isAccepted: 1 },
+      'campaignId contractId'
+    ).lean();
 
-    const campaignIds = contractRecs.map(c => c.campaignId);
+    let campaignIds = contracts.map(c => c.campaignId);
     if (campaignIds.length === 0) {
       return res.status(200).json({
         meta: { total: 0, page, limit, totalPages: 0 },
@@ -720,23 +720,50 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
       });
     }
 
-    // 2) Build a map of contract details
-    const contractMap = new Map();
-    const acceptedMap = new Map();
-    contractRecs.forEach(c => {
-      contractMap.set(c.campaignId, c.contractId);
-      acceptedMap.set(c.campaignId, c.isAccepted === 1 ? 1 : 0);
+    /* ------------------------------------------------------------------
+       2) Intersect with campaigns the influencer actually applied to
+          (guarantees hasApplied == 1)
+    ------------------------------------------------------------------ */
+    const applyRecs = await ApplyCampaign.find(
+      {
+        campaignId: { $in: campaignIds },
+        'applicants.influencerId': influencerId
+      },
+      'campaignId'
+    ).lean();
+
+    const appliedIdsSet = new Set(applyRecs.map(r => r.campaignId));
+    campaignIds = campaignIds.filter(id => appliedIdsSet.has(id));
+
+    if (campaignIds.length === 0) {
+      return res.status(200).json({
+        meta: { total: 0, page, limit, totalPages: 0 },
+        campaigns: []
+      });
+    }
+
+    /* ------------------------------------------------------------------
+       3) Helper map for contractId lookup
+    ------------------------------------------------------------------ */
+    const contractIdMap = new Map();
+    contracts.forEach(c => {
+      if (appliedIdsSet.has(c.campaignId)) {
+        contractIdMap.set(c.campaignId, c.contractId);
+      }
     });
 
-    // 3) Build campaign filter (only those assigned + active)
+    /* ------------------------------------------------------------------
+       4) Build campaign filter (active + search + id list)
+    ------------------------------------------------------------------ */
     const filter = {
       campaignsId: { $in: campaignIds },
-      isActive: 1
+      isActive: 1            // keep if you still want only active campaigns
     };
+
     if (search?.trim()) {
       const term = search.trim();
       const or = [
-        { brandName: { $regex: term, $options: 'i' } },
+        { brandName:            { $regex: term, $options: 'i' } },
         { productOrServiceName: { $regex: term, $options: 'i' } }
       ];
       const num = Number(term);
@@ -744,43 +771,52 @@ exports.getApprovedCampaignsByInfluencer = async (req, res) => {
       filter.$or = or;
     }
 
-    // 4) Pagination math
-    const pageNum = Math.max(1, page);
-    const lim = Math.max(1, limit);
-    const skip = (pageNum - 1) * lim;
+    /* ------------------------------------------------------------------
+       5) Pagination
+    ------------------------------------------------------------------ */
+    const pageNum = Math.max(1, parseInt(page, 10));
+    const limNum  = Math.max(1, parseInt(limit, 10));
+    const skip    = (pageNum - 1) * limNum;
 
-    // 5) Count & fetch
-    const total = await Campaign.countDocuments(filter);
-    const campaigns = await Campaign.find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(lim)
-      .populate('interestId', 'name')
-      .lean();
+    /* ------------------------------------------------------------------
+       6) Fetch campaigns
+    ------------------------------------------------------------------ */
+    const [ total, rawCampaigns ] = await Promise.all([
+      Campaign.countDocuments(filter),
+      Campaign.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limNum)
+        .populate('interestId', 'name')
+        .lean()
+    ]);
 
-    // 6) Annotate each with its contract info
-    const annotated = campaigns.map(c => {
-      const cid = c.campaignsId;
-      return {
-        ...c,
-        isContracted: 1,                        // by definition
-        contractId: contractMap.get(cid),
-        isAccepted: acceptedMap.get(cid) || 0
-      };
-    });
+    /* ------------------------------------------------------------------
+       7) Annotate flags
+    ------------------------------------------------------------------ */
+    const campaigns = rawCampaigns.map(c => ({
+      ...c,
+      hasApplied:   1,
+      isContracted: 1,
+      isAccepted:   1,
+      contractId:   contractIdMap.get(c.campaignsId)
+    }));
 
-    // 7) Respond
+    /* ------------------------------------------------------------------
+       8) Respond
+    ------------------------------------------------------------------ */
     return res.json({
       meta: {
         total,
-        page: pageNum,
-        limit: lim,
-        totalPages: Math.ceil(total / lim)
+        page:       pageNum,
+        limit:      limNum,
+        totalPages: Math.ceil(total / limNum)
       },
-      campaigns: annotated
+      campaigns
     });
+
   } catch (err) {
-    console.error('Error in getAssignedCampaignsByInfluencer:', err);
+    console.error('Error in getApprovedCampaignsByInfluencer:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };

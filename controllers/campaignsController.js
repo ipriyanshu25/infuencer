@@ -949,13 +949,23 @@ exports.getAcceptedCampaigns = async (req, res) => {
 //      • Body: { campaignId }
 // ===============================
 exports.getAcceptedInfluencers = async (req, res) => {
-  const { campaignId } = req.body;
+  const {
+    campaignId,
+    search   = '',
+    page     = 1,
+    limit    = 10,
+    sortBy   = 'createdAt',
+    order    = 'desc'
+  } = req.body;
+
   if (!campaignId) {
     return res.status(400).json({ message: 'campaignId is required' });
   }
 
   try {
-    // 1) All accepted contracts for this campaign
+    /* ----------------------------------------
+       1) Accepted contracts for this campaign
+    ----------------------------------------- */
     const contracts = await Contract.find(
       { campaignId, isAccepted: 1 },
       'influencerId contractId feeAmount'
@@ -963,32 +973,106 @@ exports.getAcceptedInfluencers = async (req, res) => {
 
     const influencerIds = contracts.map(c => c.influencerId);
     if (influencerIds.length === 0) {
-      return res.status(200).json({ influencers: [] });
+      return res.status(200).json({
+        meta: { total: 0, page, limit, totalPages: 0 },
+        influencers: []
+      });
     }
 
-    // 2) Build helper maps
-    const contractMap = new Map();  // influencerId → contractId
-    const feeMap      = new Map();  // influencerId → feeAmount
+    /* ----------------------------------------
+       2) Helper maps for quick annotation
+    ----------------------------------------- */
+    const contractMap = new Map();
+    const feeMap      = new Map();
     contracts.forEach(c => {
       contractMap.set(c.influencerId, c.contractId);
       feeMap.set(c.influencerId,      c.feeAmount);
     });
 
-    // 3) Fetch influencer profiles
-    const influencers = await Influencer.find(
-      { influencerId: { $in: influencerIds } },
-      '-passwordHash -__v'            // omit sensitive fields as needed
-    ).lean();
+    /* ----------------------------------------
+       3) Build Influencer query filter
+    ----------------------------------------- */
+    const filter = { influencerId: { $in: influencerIds } };
 
-    // 4) Attach contract info
-    const annotated = influencers.map(i => ({
+    if (search.trim()) {
+      const term = search.trim();
+      const regex = new RegExp(term, 'i');              // case‑insensitive
+      filter.$or = [
+        { name:    regex },
+        { handle:  regex },
+        { email:   regex }
+        // add more searchable fields if you like
+      ];
+    }
+
+    /* ----------------------------------------
+       4) Pagination math
+    ----------------------------------------- */
+    const pageNum = Math.max(1, parseInt(page, 10));
+    const limNum  = Math.max(1, parseInt(limit, 10));
+    const skip    = (pageNum - 1) * limNum;
+
+    /* ----------------------------------------
+       5) Sorting
+          – allow only a safe whitelist of fields
+    ----------------------------------------- */
+    const SORT_WHITELIST = {
+      createdAt:    'createdAt',
+      name:         'name',
+      followerCount:'followerCount',
+      feeAmount:    'feeAmount'      // virtual, handled later
+    };
+    const sortField = SORT_WHITELIST[sortBy] || 'createdAt';
+    const sortDir   = order === 'asc' ? 1 : -1;
+
+    /* If sorting by feeAmount (comes from Contract, not Influencer),
+       we can sort after fetching, otherwise let Mongo do it.          */
+    const needPostSort = sortField === 'feeAmount';
+    const mongoSort    = needPostSort ? {} : { [sortField]: sortDir };
+
+    /* ----------------------------------------
+       6) Fetch total & page of influencers
+    ----------------------------------------- */
+    const [ total, rawInfluencers ] = await Promise.all([
+      Influencer.countDocuments(filter),
+      Influencer.find(filter)
+        .sort(mongoSort)
+        .skip(skip)
+        .limit(limNum)
+        .select('-passwordHash -__v')   // omit sensitive fields
+        .lean()
+    ]);
+
+    /* ----------------------------------------
+       7) Attach contract info  & optional post‑sort
+    ----------------------------------------- */
+    let influencers = rawInfluencers.map(i => ({
       ...i,
       contractId: contractMap.get(i.influencerId),
       feeAmount:  feeMap.get(i.influencerId),
       isAccepted: 1
     }));
 
-    return res.json({ influencers: annotated });
+    if (needPostSort) {
+      influencers.sort((a, b) =>
+        order === 'asc'
+          ? a.feeAmount - b.feeAmount
+          : b.feeAmount - a.feeAmount
+      );
+    }
+
+    /* ----------------------------------------
+       8) Respond
+    ----------------------------------------- */
+    return res.json({
+      meta: {
+        total,
+        page:       pageNum,
+        limit:      limNum,
+        totalPages: Math.ceil(total / limNum)
+      },
+      influencers
+    });
 
   } catch (err) {
     console.error('Error in getAcceptedInfluencers:', err);

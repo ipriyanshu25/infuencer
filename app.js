@@ -29,6 +29,8 @@ const dashboardRoutes     = require('./routes/dashboardRoutes');
 const platformRoutes      = require('./routes/platformRoutes');
 const audienceRangeRoutes = require('./routes/audiencerangeRoutes');
 const invitationRoutes    = require('./routes/invitationRoutes');
+const filtersRoutes      = require('./routes/filterRoutes');
+
 
 // Models needed inside WS handlers
 const ChatRoom = require('./models/chat');
@@ -190,6 +192,7 @@ app.use('/dash', dashboardRoutes);
 app.use('/platform', platformRoutes);
 app.use('/audienceRange', audienceRangeRoutes);
 app.use('/invitation', invitationRoutes);
+app.use('/filters', filtersRoutes);
 
 /* -------------------------------------------------
    Mongo & start

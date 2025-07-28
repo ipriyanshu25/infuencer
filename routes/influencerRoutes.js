@@ -13,7 +13,11 @@ requestOtpInfluencer,
 verifyOtpInfluencer,
 requestPasswordResetOtpInfluencer,
 verifyPasswordResetOtpInfluencer,
-resetPasswordInfluencer
+resetPasswordInfluencer,
+viewPaymentByType,
+addPaymentMethod,
+deletePaymentMethod,
+updatePaymentMethod
 } = require('../controllers/influencerController');
 
 // Public endpoints:
@@ -28,5 +32,11 @@ router.get('/getById', verifyToken,getById);
 router.post('/sendOtp', requestPasswordResetOtpInfluencer);
 router.post('/verifyOtp',   verifyPasswordResetOtpInfluencer);
 router.post('/updatePassword', resetPasswordInfluencer);
+
+router.post('/viewPaymentByType', verifyToken, viewPaymentByType);
+
+router.post('/addPaymentMethod', verifyToken, addPaymentMethod);
+router.post('/deletePaymentMethod', verifyToken, deletePaymentMethod);
+router.post('/updatePaymentMethod', verifyToken, updatePaymentMethod);
 
 module.exports = router;

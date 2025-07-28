@@ -552,3 +552,250 @@ exports.resetPasswordInfluencer = async (req, res) => {
     return res.status(403).json({ message: 'Invalid or expired reset token' });
   }
 };
+
+
+
+
+exports.addPaymentMethod = async (req, res) => {
+  try {
+    const { influencerId } = req.influencer || {}; // from verifyToken
+    const {
+      type,            // 0 = PayPal, 1 = Bank
+      bank = {},       // { accountHolder, accountNumber, ifsc, swift, bankName, branch, country }
+      paypal = {},     // { email, paypalId }
+      isDefault = false
+    } = req.body;
+
+    if (![0, 1].includes(Number(type))) {
+      return res.status(400).json({ message: 'type must be 0 (PayPal) or 1 (Bank)' });
+    }
+
+    // Fetch influencer doc
+    const inf = await Influencer.findOne({ influencerId });
+    if (!inf) return res.status(404).json({ message: 'Influencer not found' });
+
+    // Build payment object
+    const paymentObj = {
+      paymentId: uuidv4(),
+      type: Number(type),
+      bank: undefined,
+      paypal: undefined,
+      isDefault: Boolean(isDefault)
+    };
+
+    if (Number(type) === 1) {
+      // Bank required fields
+      const required = ['accountHolder', 'accountNumber', 'bankName'];
+      for (const f of required) {
+        if (!bank[f]?.trim()) {
+          return res.status(400).json({ message: `Missing bank field: ${f}` });
+        }
+      }
+      paymentObj.bank = {
+        accountHolder: bank.accountHolder.trim(),
+        accountNumber: bank.accountNumber.trim(),
+        ifsc: bank.ifsc?.trim(),
+        swift: bank.swift?.trim(),
+        bankName: bank.bankName.trim(),
+        branch: bank.branch?.trim(),
+        country: bank.country?.trim()
+      };
+    } else {
+      // PayPal required fields
+      if (!paypal.email?.trim()) {
+        return res.status(400).json({ message: 'paypal.email is required' });
+      }
+      paymentObj.paypal = {
+        email: paypal.email.trim(),
+        paypalId: paypal.paypalId?.trim()
+      };
+    }
+
+    // If setting default, clear others
+    if (paymentObj.isDefault) {
+      inf.paymentMethods.forEach(pm => (pm.isDefault = false));
+    } else {
+      // If user has no payment methods yet, force first one as default
+      if (inf.paymentMethods.length === 0) paymentObj.isDefault = true;
+    }
+
+    // Push and save
+    inf.paymentMethods.push(paymentObj);
+    await inf.save();
+
+    return res.status(201).json({
+      message: 'Payment method added',
+      paymentId: paymentObj.paymentId,
+      paymentMethods: inf.paymentMethods
+    });
+  } catch (err) {
+    console.error('Error in addPaymentMethod:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+
+exports.deletePaymentMethod = async (req, res) => {
+  try {
+    const { influencerId } = req.influencer || {};
+    const { paymentId } = req.body;
+
+    const inf = await Influencer.findOne({ influencerId });
+    if (!inf) return res.status(404).json({ message: 'Influencer not found' });
+
+    const idx = inf.paymentMethods.findIndex(pm => pm.paymentId === paymentId);
+    if (idx === -1) return res.status(404).json({ message: 'Payment method not found' });
+
+    const wasDefault = inf.paymentMethods[idx].isDefault;
+    inf.paymentMethods.splice(idx, 1);
+
+    // If we deleted default, mark first remaining as default (if any)
+    if (wasDefault && inf.paymentMethods.length > 0) {
+      inf.paymentMethods[0].isDefault = true;
+    }
+
+    await inf.save();
+    return res.status(200).json({ message: 'Payment method deleted', paymentMethods: inf.paymentMethods });
+  } catch (err) {
+    console.error('Error in deletePaymentMethod:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+const mask = (val = '', keep = 4) =>
+  val.length <= keep ? val : '*'.repeat(val.length - keep) + val.slice(-keep);
+
+exports.viewPaymentByType = async (req, res) => {
+  try {
+    const requester = req.influencer;                 // from verifyToken
+    const { influencerId, type } = req.body || {};
+
+    if (!influencerId) {
+      return res.status(400).json({ message: 'influencerId is required' });
+    }
+    if (type === undefined || ![0, 1].includes(Number(type))) {
+      return res.status(400).json({ message: 'type must be 0 (PayPal) or 1 (Bank)' });
+    }
+
+    // self-only (adjust for admin roles if needed)
+    if (!requester || requester.influencerId !== influencerId) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
+    const inf = await Influencer.findOne(
+      { influencerId },
+      'paymentMethods influencerId'
+    );
+    if (!inf) return res.status(404).json({ message: 'Influencer not found' });
+
+    // Filter by type
+    let filtered = inf.paymentMethods.filter(pm => pm.type === Number(type));
+
+    // Mask accountNumber for bank type
+    if (Number(type) === 1) {
+      filtered = filtered.map(pm => {
+        const obj = pm.toObject();
+        if (obj.bank?.accountNumber) {
+          obj.bank.accountNumber = mask(obj.bank.accountNumber);
+        }
+        return obj;
+      });
+    }
+
+    return res.status(200).json({
+      influencerId: inf.influencerId,
+      type: Number(type),
+      paymentMethods: filtered
+    });
+  } catch (err) {
+    console.error('Error in viewPaymentByType:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+
+exports.updatePaymentMethod = async (req, res) => {
+  try {
+    const { influencerId } = req.influencer; // from verifyToken
+    const {
+      paymentId,
+      type,                 // 0 = PayPal, 1 = Bank
+      bank = {},            // fields to update if type === 1
+      paypal = {},          // fields to update if type === 0
+      isDefault             // optional boolean
+    } = req.body || {};
+
+    if (!paymentId) {
+      return res.status(400).json({ message: 'paymentId is required' });
+    }
+    if (type === undefined || ![0, 1].includes(Number(type))) {
+      return res.status(400).json({ message: 'type must be 0 (PayPal) or 1 (Bank)' });
+    }
+
+    const inf = await Influencer.findOne({ influencerId });
+    if (!inf) return res.status(404).json({ message: 'Influencer not found' });
+
+    const pm = inf.paymentMethods.find(p => p.paymentId === paymentId);
+    if (!pm) return res.status(404).json({ message: 'Payment method not found' });
+
+    pm.type = Number(type);
+
+    if (pm.type === 1) {
+      // Bank required fields
+      const required = ['accountHolder', 'accountNumber', 'bankName'];
+      for (const f of required) {
+        const val = bank[f] !== undefined ? bank[f] : pm.bank?.[f];
+        if (!val || !String(val).trim()) {
+          return res.status(400).json({ message: `Missing bank field: ${f}` });
+        }
+      }
+      pm.bank = {
+        accountHolder: bank.accountHolder ?? pm.bank?.accountHolder,
+        accountNumber: bank.accountNumber ?? pm.bank?.accountNumber,
+        ifsc:          bank.ifsc ?? pm.bank?.ifsc,
+        swift:         bank.swift ?? pm.bank?.swift,
+        bankName:      bank.bankName ?? pm.bank?.bankName,
+        branch:        bank.branch ?? pm.bank?.branch,
+        country:       bank.country ?? pm.bank?.country
+      };
+      pm.paypal = undefined;
+    } else {
+      // PayPal required field
+      const emailVal = paypal.email ?? pm.paypal?.email;
+      if (!emailVal || !String(emailVal).trim()) {
+        return res.status(400).json({ message: 'paypal.email is required' });
+      }
+      pm.paypal = {
+        email: paypal.email ?? pm.paypal?.email,
+        paypalId: paypal.paypalId ?? pm.paypal?.paypalId
+      };
+      pm.bank = undefined;
+    }
+
+    if (typeof isDefault === 'boolean') {
+      if (isDefault) {
+        inf.paymentMethods.forEach(x => (x.isDefault = false));
+        pm.isDefault = true;
+      } else {
+        pm.isDefault = false;
+        if (!inf.paymentMethods.some(x => x.isDefault)) {
+          pm.isDefault = true; // keep at least one default
+        }
+      }
+    }
+
+    await inf.save();
+
+    return res.status(200).json({
+      message: 'Payment method updated',
+      paymentMethod: pm,
+      paymentMethods: inf.paymentMethods
+    });
+  } catch (err) {
+    console.error('Error in updatePaymentMethod:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};

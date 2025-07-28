@@ -2,7 +2,9 @@
 
 const express = require('express');
 const router  = express.Router();
-const { register, login,verifyToken,getBrandById,getAllBrands ,requestOtp,verifyOtp,requestPasswordResetOtp,verifyPasswordResetOtp,resetPassword} = require('../controllers/brandController');
+const { register, login,verifyToken,getBrandById,getAllBrands ,requestOtp,verifyOtp,requestPasswordResetOtp,verifyPasswordResetOtp,resetPassword } = require('../controllers/brandController');
+
+const {searchInfluencers} = require('../controllers/influencerController');
 
 // POST /brand/register → register a new brand
 router.post('/register', register);
@@ -26,5 +28,12 @@ router.post(
   getAllBrands
 );
 
+
+// POST /brand/searchInfluencers → search influencers by name
+router.post(
+  '/searchInf',
+  
+  searchInfluencers
+);
 module.exports = router;
   

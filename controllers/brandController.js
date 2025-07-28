@@ -360,3 +360,50 @@ exports.resetPassword = async (req, res) => {
     return res.status(403).json({ message: 'Invalid or expired reset token' });
   }
 };
+
+
+
+const delay = ms => new Promise(res => setTimeout(res, ms));
+
+exports.searchBrands = async (req, res) => {
+  try {
+    const requester = req.influencer;  
+    const { search, influencerId } = req.body || {};
+
+    // 1) Validate inputs
+    if (!influencerId) {
+      return res.status(400).json({ message: 'influencerId is required' });
+    }
+    // ensure the token’s influencerId matches the body
+    if (!requester || requester.influencerId !== influencerId) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+    if (!search || !String(search).trim()) {
+      return res.status(400).json({ message: 'search is required' });
+    }
+
+
+    await delay(300);
+
+    const regex = new RegExp(search.trim(), 'i');
+    const docs = await Brand
+      .find({ name: regex }, 'name brandId')
+      .limit(10)
+      .lean();
+
+    if (!docs || docs.length === 0) {
+      return res.status(404).json({ message: 'No brands found' });
+    }
+
+
+    const results = docs.map(d => ({
+      name: d.name,
+      brandId: d.brandId
+    }));
+
+    return res.json({ results });
+  } catch (err) {
+    console.error('Error in searchBrands:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};

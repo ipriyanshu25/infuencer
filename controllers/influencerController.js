@@ -799,3 +799,54 @@ exports.updatePaymentMethod = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+
+
+const delay = ms => new Promise(res => setTimeout(res, ms));
+
+exports.searchInfluencers = async (req, res) => {
+  try {
+    const requester = req.brand;               // from brandCtrl.verifyToken
+    const { search, brandId } = req.body || {};
+
+    // 1) Validate brandId
+    if (!brandId) {
+      return res.status(400).json({ message: 'brandId is required' });
+    }
+    if (!requester || requester.brandId !== brandId) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
+    // 2) Validate search term
+    if (!search || !String(search).trim()) {
+      return res.status(400).json({ message: 'search is required' });
+    }
+
+    // 3) Debounce delay
+    await delay(300);
+
+    // 4) Perform query
+    const regex = new RegExp(search.trim(), 'i');
+    const docs = await Influencer
+      .find({ name: regex }, 'name influencerId')
+      .limit(10)
+      .lean();
+
+    // 5) No results
+    if (docs.length === 0) {
+      return res.status(404).json({ message: 'No influencers found' });
+    }
+
+    // 6) Map and respond
+    const results = docs.map(d => ({
+      name: d.name,
+      influencerId: d.influencerId
+    }));
+    return res.json({ results });
+
+  } catch (err) {
+    console.error('Error in searchInfluencers:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};

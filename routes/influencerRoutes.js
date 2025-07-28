@@ -20,6 +20,9 @@ deletePaymentMethod,
 updatePaymentMethod
 } = require('../controllers/influencerController');
 
+
+const {searchBrands} = require('../controllers/brandController');
+
 // Public endpoints:
 router.post('/request-otp', requestOtpInfluencer);
 router.post('/verify-otp', verifyOtpInfluencer);
@@ -38,5 +41,12 @@ router.post('/viewPaymentByType', verifyToken, viewPaymentByType);
 router.post('/addPaymentMethod', verifyToken, addPaymentMethod);
 router.post('/deletePaymentMethod', verifyToken, deletePaymentMethod);
 router.post('/updatePaymentMethod', verifyToken, updatePaymentMethod);
+
+// POST /influencer/searchBrands → search brands by name
+router.post(    
+  '/searchBrand',
+  verifyToken,
+  searchBrands
+);  
 
 module.exports = router;

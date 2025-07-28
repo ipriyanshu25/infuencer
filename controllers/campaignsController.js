@@ -521,25 +521,53 @@ exports.getActiveCampaignsByBrand = async (req, res) => {
 
 exports.getPreviousCampaigns = async (req, res) => {
   try {
-    const brandId = req.query.brandId;
+    const {
+      brandId,
+      page = 1,
+      limit = 10,
+      search = '',
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
     if (!brandId) {
       return res.status(400).json({ message: 'Query parameter brandId is required.' });
     }
 
-    // Find campaigns where brandId matches and isActive = 1
-    const campaigns = await Campaign.find({
-      brandId: brandId,
-      isActive: 0
-    })
-      .sort({ createdAt: -1 })
-      .populate('interestId', 'name');
+    // Build filter for previous (inactive) campaigns
+    const filter = { brandId, isActive: 0 };
+    if (search) {
+      filter.name = { $regex: search, $options: 'i' };
+    }
 
-    return res.json(campaigns);
+    // Pagination calculations
+    const pageNum = Math.max(parseInt(page, 10), 1);
+    const perPage = Math.max(parseInt(limit, 10), 1);
+    const skip = (pageNum - 1) * perPage;
+
+    // Sorting
+    const sortDir = sortOrder.toLowerCase() === 'asc' ? 1 : -1;
+    const sortObj = { [sortBy]: sortDir };
+
+    // Fetch data and count in parallel
+    const [campaigns, totalCount] = await Promise.all([
+      Campaign.find(filter)
+        .populate('interestId', 'name')
+        .sort(sortObj)
+        .skip(skip)
+        .limit(perPage)
+        .lean(),
+      Campaign.countDocuments(filter)
+    ]);
+
+    const totalPages = Math.ceil(totalCount / perPage);
+    return res.json({
+      data: campaigns,
+      pagination: { total: totalCount, page: pageNum, limit: perPage, totalPages }
+    });
   } catch (error) {
-    console.error('Error in getActiveCampaignsByBrand:', error);
-    return res
-      .status(500)
-      .json({ message: 'Internal server error while fetching active campaigns.' });
+    console.error('Error in getPreviousCampaigns:', error);
+    return res.status(500).json({ message: 'Internal server error while fetching previous campaigns.' });
   }
 };
 

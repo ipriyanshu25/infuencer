@@ -32,7 +32,7 @@ router.post(
 // POST /brand/searchInfluencers → search influencers by name
 router.post(
   '/searchInf',
-  
+  verifyToken,
   searchInfluencers
 );
 module.exports = router;

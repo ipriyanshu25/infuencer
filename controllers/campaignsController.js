@@ -458,25 +458,64 @@ exports.deleteCampaign = async (req, res) => {
 
 exports.getActiveCampaignsByBrand = async (req, res) => {
   try {
-    const { brandId } = req.query;
+    // Extract and validate query parameters
+    const {
+      brandId,
+      page = 1,
+      limit = 10,
+      search = '',
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
     if (!brandId) {
       return res.status(400).json({ message: 'Query parameter brandId is required.' });
     }
 
-    const campaigns = await Campaign.find({
-      brandId,
-      isActive: 1
-    })
-      .sort({ createdAt: -1 })
-      .populate('interestId', 'name')
-      .lean();    // ← returns plain JS objects, including `applicantCount`
+    // Build the base filter
+    const filter = { brandId, isActive: 1 };
 
-    return res.json(campaigns);
+    // Add text search on campaign name if provided
+    if (search) {
+      filter.name = { $regex: search, $options: 'i' };
+    }
+
+    // Parse pagination params
+    const pageNum = Math.max(parseInt(page, 10), 1);
+    const perPage = Math.max(parseInt(limit, 10), 1);
+    const skip = (pageNum - 1) * perPage;
+
+    // Build sort object dynamically
+    const sortDir = sortOrder.toLowerCase() === 'asc' ? 1 : -1;
+    const sortObj = { [sortBy]: sortDir };
+
+    // Execute queries in parallel: paginated data and total count
+    const [campaigns, totalCount] = await Promise.all([
+      Campaign.find(filter)
+        .populate('interestId', 'name')
+        .sort(sortObj)
+        .skip(skip)
+        .limit(perPage)
+        .lean(),
+      Campaign.countDocuments(filter)
+    ]);
+
+    // Calculate total pages
+    const totalPages = Math.ceil(totalCount / perPage);
+
+    // Respond with data and pagination metadata
+    return res.json({
+      data: campaigns,
+      pagination: {
+        total: totalCount,
+        page: pageNum,
+        limit: perPage,
+        totalPages
+      }
+    });
   } catch (error) {
     console.error('Error in getActiveCampaignsByBrand:', error);
-    return res
-      .status(500)
-      .json({ message: 'Internal server error while fetching active campaigns.' });
+    return res.status(500).json({ message: 'Internal server error while fetching active campaigns.' });
   }
 };
 

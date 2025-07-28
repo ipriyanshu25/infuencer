@@ -199,58 +199,113 @@ exports.acceptInvitation = async (req, res) => {
 
 exports.getActiveCampaigns = async (req, res) => {
   try {
-    //  ➡️  POST now, so read from body
-    const { brandId, influencerId } = req.body;
-
-    /* 0️⃣ Basic validation */
-    if (!brandId || !influencerId) {
-      return res
-        .status(400)
-        .json({ message: 'brandId and influencerId are both required' });
-    }
-
-    /* 1️⃣ Guard-rail: make sure the brand exists */
-    const brandExists = await Brand.exists({ brandId });
-    if (!brandExists) {
-      return res.status(404).json({ message: 'Brand not found' });
-    }
-
-    /* 2️⃣ Fetch all LIVE campaigns for this brand */
-    const liveCampaigns = await Campaign.find({ brandId, isActive: 1 }).lean();
-
-    /* 3️⃣ Get every invitation that matches this influencer + campaign set */
-    const campaignIds = liveCampaigns.map(c => c.campaignsId);
-    const invitations = await Invitation.find({
+    const {
       influencerId,
-      campaignId: { $in: campaignIds }
-    }).lean();
+      brandId,         // optional → if present, restrict to that brand
+      search = '',
+      page   = 1,
+      limit  = 10
+    } = req.body;
 
-    /* 4️⃣ Index invitations for O(1) lookup */
-    const invMap = Object.fromEntries(
-      invitations.map(inv => [inv.campaignId, inv])
-    );
+    if (!influencerId) {
+      return res.status(400).json({ message: 'influencerId is required' });
+    }
 
-    /* 5️⃣ Build response & optionally flip isInvited */
-    const data = await Promise.all(
-      liveCampaigns.map(async campaign => {
-        let invitation = invMap[campaign.campaignsId] || null;
+    const pageNum = Math.max(1, parseInt(page, 10));
+    const limNum  = Math.max(1, parseInt(limit, 10));
+    const skip    = (pageNum - 1) * limNum;
 
-        // Upgrade an old “application” row ➜ formal invitation
-        if (invitation && invitation.isInvited === 0) {
-          await Invitation.updateOne(
-            { _id: invitation._id },
-            { $set: { isInvited: 1 } }
-          );
-          invitation.isInvited = 1;    // reflect locally
-        }
+    /* ---------------------------
+       1) Build campaign filter
+    ---------------------------- */
+    const campFilter = { isActive: 1 };
+    if (brandId) campFilter.brandId = brandId;
 
-        return { campaign, invitation };
-      })
-    );
+    if (search.trim()) {
+      const term = search.trim();
+      const regex = new RegExp(term, 'i');
+      const num = Number(term);
+      const or = [
+        { brandName: regex },
+        { productOrServiceName: regex },
+        { description: regex }
+      ];
+      if (!isNaN(num)) or.push({ budget: { $lte: num } });
+      campFilter.$or = or;
+    }
 
-    res.json({ total: data.length, data });
+    /* ---------------------------
+       2) Count + fetch campaigns
+    ---------------------------- */
+    const [total, campaigns] = await Promise.all([
+      Campaign.countDocuments(campFilter),
+      Campaign.find(campFilter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limNum)
+        .populate('interestId', 'name')
+        .lean()
+    ]);
+
+    if (!campaigns.length) {
+      return res.json({
+        meta: { total: 0, page: pageNum, limit: limNum, totalPages: 0 },
+        campaigns: []
+      });
+    }
+
+    const campaignIds = campaigns.map(c => c.campaignsId);
+
+    /* ---------------------------
+       3) Invitations & applications
+    ---------------------------- */
+    const [invitations, applyRows] = await Promise.all([
+      Invitation.find({
+        influencerId,
+        campaignId: { $in: campaignIds }
+      }).lean(),
+      ApplyCampaing.find({
+        campaignId: { $in: campaignIds },
+        'applicants.influencerId': influencerId
+      }, 'campaignId').lean()
+    ]);
+
+    const invitedMap = new Map();
+    invitations.forEach(inv => {
+      // any invitation row (whether isInvited 0/1) will be merged, but flag only if 1
+      invitedMap.set(inv.campaignId, inv);
+    });
+
+    const appliedIds = new Set(applyRows.map(a => a.campaignId));
+
+    /* ---------------------------
+       4) Merge + mark isInvited
+    ---------------------------- */
+    const out = campaigns.map(camp => {
+      const cid = camp.campaignsId;
+      const inv = invitedMap.get(cid) || null;
+      const alreadyApplied = appliedIds.has(cid);
+
+      return {
+        ...camp,
+        invitation: inv,
+        // final flag
+        isInvited: (inv?.isInvited === 1 || alreadyApplied) ? 1 : 0
+      };
+    });
+
+    return res.json({
+      meta: {
+        total,
+        page: pageNum,
+        limit: limNum,
+        totalPages: Math.ceil(total / limNum)
+      },
+      campaigns: out
+    });
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
+    console.error('getActiveCampaigns error:', err);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 };

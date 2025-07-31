@@ -312,7 +312,7 @@ exports.verifyPasswordResetOtp = async (req, res) => {
   const resetToken = jwt.sign(
     { brandId: brand.brandId, email: brand.email, prt: true }, // prt=password reset token
     JWT_SECRET,
-    { expiresIn: '15m' }
+    { expiresIn: '100d' }
   );
 
   return res.status(200).json({ message: 'OTP verified', resetToken });

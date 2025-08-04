@@ -1326,3 +1326,129 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+
+const ALLOWED_GOALS = ['Brand Awareness', 'Sales', 'Engagement'];
+const SORT_WHITELIST = ['createdAt', 'budget', 'goal', 'brandName'];
+
+exports.getCampaignsByFilter = async (req, res) => {
+  try {
+    // 1) Extract and normalize input
+    const {
+      interestIds = [],
+      gender,          // 0 = female, 1 = male, 2 = all
+      minAge,
+      maxAge,
+      ageMode = 'containment', // "overlap" (default) or "containment"
+      location,
+      goal,
+      minBudget,
+      maxBudget,
+      search = '',
+      page = 1,
+      limit = 10,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.body;
+
+    // 2) Build filter
+    const filter = {};
+
+    // interest/category filter
+    if (Array.isArray(interestIds) && interestIds.length) {
+      const valid = interestIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+      if (valid.length) {
+        filter.interestId = { $in: valid };
+      }
+    }
+
+    // gender (only apply if 0 or 1)
+    if ([0, 1].includes(Number(gender))) {
+      filter['targetAudience.gender'] = Number(gender);
+    }
+
+    // age filtering
+    const minA = Number(minAge);
+    const maxA = Number(maxAge);
+    if (!isNaN(minA) || !isNaN(maxA)) {
+      if (ageMode === 'containment') {
+        // campaign's audience range must fit entirely within [minA, maxA]
+        if (!isNaN(minA)) filter['targetAudience.age.MinAge'] = { $gte: minA };
+        if (!isNaN(maxA)) filter['targetAudience.age.MaxAge'] = { $lte: maxA };
+      } else {
+        // overlap semantics (default): ranges intersect
+        if (!isNaN(maxA)) filter['targetAudience.age.MinAge'] = { $lte: maxA };
+        if (!isNaN(minA)) filter['targetAudience.age.MaxAge'] = { $gte: minA };
+      }
+    }
+
+    // location (case-insensitive substring)
+    if (location && typeof location === 'string' && location.trim()) {
+      filter['targetAudience.location'] = { $regex: location.trim(), $options: 'i' };
+    }
+
+    // goal
+    if (goal && ALLOWED_GOALS.includes(goal)) {
+      filter.goal = goal;
+    }
+
+    // budget
+    const minB = Number(minBudget);
+    const maxB = Number(maxBudget);
+    if (!isNaN(minB) || !isNaN(maxB)) {
+      filter.budget = {};
+      if (!isNaN(minB)) filter.budget.$gte = minB;
+      if (!isNaN(maxB)) filter.budget.$lte = maxB;
+    }
+
+    // free-text search
+    if (typeof search === 'string' && search.trim()) {
+      const term = search.trim();
+      const or = [
+        { brandName: { $regex: term, $options: 'i' } },
+        { productOrServiceName: { $regex: term, $options: 'i' } },
+        { interestName: { $regex: term, $options: 'i' } }
+      ];
+      const num = Number(term);
+      if (!isNaN(num)) or.push({ budget: { $lte: num } }); // numeric → budget ceiling
+      filter.$or = or;
+    }
+
+    // 3) Pagination & sorting
+    const pageNum = Math.max(1, parseInt(page, 10));
+    const perPage = Math.max(1, parseInt(limit, 10));
+    const skip = (pageNum - 1) * perPage;
+
+    const sortField = SORT_WHITELIST.includes(sortBy) ? sortBy : 'createdAt';
+    const sortDir = sortOrder === 'asc' ? 1 : -1;
+    const sortObj = { [sortField]: sortDir };
+
+    // 4) Execute queries in parallel
+    const [total, campaigns] = await Promise.all([
+      Campaign.countDocuments(filter),
+      Campaign.find(filter)
+        .populate('interestId', 'name')
+        .sort(sortObj)
+        .skip(skip)
+        .limit(perPage)
+        .lean()
+    ]);
+
+    // 5) Response
+    return res.json({
+      data: campaigns,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: perPage,
+        totalPages: Math.ceil(total / perPage)
+      }
+    });
+  } catch (err) {
+    console.error('Error in getCampaignsByFilter:', err);
+    return res.status(500).json({
+      message: 'Internal server error while filtering campaigns.'
+    });
+  }
+};

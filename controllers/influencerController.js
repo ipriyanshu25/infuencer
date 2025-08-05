@@ -670,13 +670,13 @@ exports.viewPaymentByType = async (req, res) => {
 
 exports.updatePaymentMethod = async (req, res) => {
   try {
-    const { influencerId } = req.influencer || {};
     const {
       paymentId,
       type,
       bank = {},
       paypal = {},
-      isDefault
+      isDefault,
+      influencerId
     } = req.body || {};
 
     // validate
@@ -729,7 +729,7 @@ exports.updatePaymentMethod = async (req, res) => {
         bankName: (bank.bankName ?? pm.bank.bankName).trim(),
         branch: bank.branch?.trim() ?? pm.bank.branch,
         countryId: countryDoc._id,
-        countryName: countryDoc.name
+        countryName: countryDoc.countryName
       };
       // clear PayPal
       pm.paypal = undefined;

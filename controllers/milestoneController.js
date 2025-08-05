@@ -1,5 +1,3 @@
-// controllers/milestoneController.js
-
 const Milestone = require('../models/milestone');
 const Campaign = require('../models/campaign');
 
@@ -58,8 +56,10 @@ exports.createMilestone = async (req, res) => {
     // 5) Save
     await doc.save();
 
+    // 6) Respond with milestoneId
     return res.status(201).json({
       message: 'Milestone created',
+      milestoneId: doc.milestoneId,
       walletBalance: doc.walletBalance,
       entry
     });
@@ -165,6 +165,8 @@ exports.getMilestonesByInfluencer = async (req, res) => {
   }
 };
 
+// POST /milestone/listByBrand
+// body: { brandId }
 exports.getMilestonesByBrand = async (req, res) => {
   const { brandId } = req.body;
   if (!brandId) {
@@ -172,10 +174,7 @@ exports.getMilestonesByBrand = async (req, res) => {
   }
 
   try {
-    // 1) Load the brand’s Milestone doc
     const doc = await Milestone.findOne({ brandId }).lean();
-
-    // 2) If none, return empty list
     if (!doc) {
       return res.status(200).json({
         message: 'No milestones found for this brand',
@@ -183,7 +182,6 @@ exports.getMilestonesByBrand = async (req, res) => {
       });
     }
 
-    // 3) Flatten all history entries, tagging each with brandId and current balance
     const entries = doc.milestoneHistory.map(e => ({
       ...e,
       brandId: doc.brandId,
@@ -222,7 +220,8 @@ exports.getWalletBalance = async (req, res) => {
   }
 };
 
-
+// POST /milestone/release
+// body: { milestoneId, milestoneHistoryId }
 exports.releaseMilestone = async (req, res) => {
   const { milestoneId, milestoneHistoryId } = req.body;
   if (!milestoneId || !milestoneHistoryId) {
@@ -235,7 +234,6 @@ exports.releaseMilestone = async (req, res) => {
       return res.status(404).json({ message: 'Milestone not found.' });
     }
 
-    // find the specific history entry
     const entry = doc.milestoneHistory.find(h => h.milestoneHistoryId === milestoneHistoryId);
     if (!entry) {
       return res.status(404).json({ message: 'Milestone history entry not found.' });
@@ -244,10 +242,7 @@ exports.releaseMilestone = async (req, res) => {
       return res.status(400).json({ message: 'This milestone has already been released.' });
     }
 
-    // deduct from brand wallet
     doc.walletBalance -= entry.amount;
-
-    // mark as released
     entry.released = true;
     entry.releasedAt = new Date();
 
@@ -263,7 +258,8 @@ exports.releaseMilestone = async (req, res) => {
   }
 };
 
-
+// POST /milestone/paidTotal
+// body: { influencerId }
 exports.getInfluencerPaidTotal = async (req, res) => {
   const { influencerId } = req.body;
   if (!influencerId) {

@@ -1,8 +1,6 @@
-// controllers/influencerController.js
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
-const mongoose = require('mongoose');
 const multer = require('multer');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
@@ -13,9 +11,9 @@ const Interest = require('../models/interest');
 const AudienceRange = require('../models/audience');
 const Country = require('../models/country');
 const subscriptionHelper = require('../utils/subscriptionHelper');
-const Platform = require('../models/platform');         // social‐media platforms
+const Platform = require('../models/platform');
 const Audience = require('../models/audienceRange');
-
+const Campaign = require('../models/campaign');
 
 const SMTP_HOST = process.env.SMTP_HOST;
 const SMTP_PORT = parseInt(process.env.SMTP_PORT, 10);
@@ -30,22 +28,13 @@ const transporter = nodemailer.createTransport({
   auth: { user: SMTP_USER, pass: SMTP_PASS }
 });
 
-/**
- * STEP 1: Request OTP
- * POST /influencer/request-otp
- * Body: { email }
- */
-
 const uploadDir = path.join(__dirname, '../uploads/profile_images');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// then your storage setup can simply point at uploadDir:
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
+  destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
     cb(null, `${uuidv4()}${ext}`);
@@ -61,12 +50,12 @@ const upload = multer({
     if (ext && mime) return cb(null, true);
     cb(new Error('Only JPEG, JPG, and PNG files are allowed'));
   },
-  limits: { fileSize: 2 * 1024 * 1024 } // 2 MB limit
+  limits: { fileSize: 2 * 1024 * 1024 }
 });
 
 exports.uploadProfileImage = upload.single('profileImage');
 
-
+// Request OTP (upsert, now defensive)
 exports.requestOtpInfluencer = async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: 'Email is required' });
@@ -74,97 +63,98 @@ exports.requestOtpInfluencer = async (req, res) => {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-  // upsert so we can save an email-only doc first
-  await Influencer.findOneAndUpdate(
-    { email },
-    {
-      $set: {
-        otpCode: code,
-        otpExpiresAt: expiresAt,
-        otpVerified: false
-      }
-    },
-    { upsert: true, new: true }
-  );
+  try {
+    await Influencer.findOneAndUpdate(
+      { email },
+      {
+        $set: {
+          otpCode: code,
+          otpExpiresAt: expiresAt,
+          otpVerified: false
+        }
+      },
+      { upsert: true, new: true }
+    );
+  } catch (err) {
+    if (err.code === 11000) {
+      console.error('Duplicate key during OTP upsert:', err.message);
+      return res.status(409).json({ message: 'Conflict while creating/updating influencer record.' });
+    }
+    console.error('Error in requestOtpInfluencer:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
 
-  await transporter.sendMail({
-    from: `"No-Reply" <${SMTP_USER}>`,
-    to: email,
-    subject: 'Verify Influencer',
-    text: `Your verification code is ${code}. It expires in 10 minutes.`
-  });
+  try {
+    await transporter.sendMail({
+      from: `"No-Reply" <${SMTP_USER}>`,
+      to: email,
+      subject: 'Verify Influencer',
+      text: `Your verification code is ${code}. It expires in 10 minutes.`
+    });
+  } catch (mailErr) {
+    console.warn('Failed to send OTP email:', mailErr.message);
+  }
 
   res.json({ message: 'OTP sent to email' });
 };
 
 
-/**
- * STEP 2: Verify OTP
- * POST /influencer/verify-otp
- * Body: { email, otp }
- */
 exports.verifyOtpInfluencer = async (req, res) => {
   const { email, otp } = req.body;
   if (!email || otp == null) {
     return res.status(400).json({ message: 'Email and otp required' });
   }
 
-  // atomically match and set verified, skipping full validation
-  const updated = await Influencer.findOneAndUpdate(
-    {
-      email,
-      otpCode: otp.toString().trim(),
-      otpExpiresAt: { $gt: new Date() }
-    },
-    {
-      $set: { otpVerified: true },
-      $unset: { otpCode: "", otpExpiresAt: "" }
-    },
-    { new: true, runValidators: false }
-  );
+  try {
+    const updated = await Influencer.findOneAndUpdate(
+      {
+        email,
+        otpCode: otp.toString().trim(),
+        otpExpiresAt: { $gt: new Date() }
+      },
+      {
+        $set: { otpVerified: true },
+        $unset: { otpCode: "", otpExpiresAt: "" }
+      },
+      { new: true, runValidators: false }
+    );
 
-  if (!updated) {
-    return res.status(400).json({ message: 'Invalid or expired OTP' });
+    if (!updated) {
+      return res.status(400).json({ message: 'Invalid or expired OTP' });
+    }
+    return res.json({ message: 'Email verified — you may now complete registration' });
+  } catch (err) {
+    console.error('Error in verifyOtpInfluencer:', err);
+    return res.status(500).json({ message: 'Internal server error' });
   }
-
-  res.json({ message: 'Email verified — you may now complete registration' });
 };
 
-/**
- * STEP 3: Complete registration
- * POST /influencer/register
- * Body: { name, email, password, phone, socialMedia, categoryId, audienceId, countryId, callingId, bio }
- */
-// controllers/influencerController.js
 exports.registerInfluencer = async (req, res) => {
   try {
-    // 0) ensure profile image uploaded
     if (!req.file) {
       return res.status(400).json({ message: 'Profile image is required' });
     }
 
-    // 1) pull fields out of form-data
     let {
       name,
       email,
       password,
       phone,
       socialMedia,
-      gender,                   // "0", "1" or "2"
+      gender,
       platformId,
-      manualPlatformName,       // only if platform === Other
+      manualPlatformName,
       profileLink,
       malePercentage,
       femalePercentage,
-      categories,               // JSON string or Array of Interest _ids
-      audienceAgeRangeId,       // UUID on Audience
-      audienceId,               // ObjectId of AudienceRange
+      categories,
+      audienceAgeRangeId,
+      audienceId,
       countryId,
       callingId,
       bio
     } = req.body;
 
-    // 1a) parse categories if it's a string
     if (typeof categories === 'string') {
       try {
         categories = JSON.parse(categories);
@@ -173,7 +163,6 @@ exports.registerInfluencer = async (req, res) => {
       }
     }
 
-    // 2) find influencer record & check OTP
     const inf = await Influencer.findOne({
       email: { $regex: `^${email.trim()}$`, $options: 'i' }
     });
@@ -184,7 +173,6 @@ exports.registerInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Already registered' });
     }
 
-    // 3) resolve & possibly create Platform
     let platformDoc = await Platform.findOne({ platformId });
     if (!platformDoc) {
       return res.status(400).json({ message: 'Invalid platformId' });
@@ -198,7 +186,6 @@ exports.registerInfluencer = async (req, res) => {
       platformDoc = await new Platform({ name: manualPlatformName.trim() }).save();
     }
 
-    // 4) validate categories array length & existence
     if (!Array.isArray(categories) || categories.length < 1 || categories.length > 3) {
       return res.status(400).json({
         message: 'You must select between 1 and 3 categories'
@@ -209,7 +196,6 @@ exports.registerInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Invalid category IDs' });
     }
 
-    // 5) resolve age-range, count-range, country & calling
     const [ageRangeDoc, countRangeDoc, countryDoc, callingDoc] = await Promise.all([
       Audience.findOne({ audienceId: audienceAgeRangeId }),
       AudienceRange.findById(audienceId),
@@ -220,76 +206,67 @@ exports.registerInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Invalid reference IDs' });
     }
 
-    // 6) assign all fields
-    inf.name        = name;
-    inf.password    = password;
-    inf.phone       = phone;
+    inf.name = name;
+    inf.password = password;
+    inf.phone = phone;
     inf.socialMedia = socialMedia;
-    inf.gender      = Number(gender);
+    inf.gender = Number(gender);
 
-    inf.platformId   = platformDoc._id;
+    inf.platformId = platformDoc._id;
     inf.platformName = platformDoc.name;
 
-    inf.profileLink  = profileLink;
+    inf.profileLink = profileLink;
     inf.profileImage = `/uploads/profile_images/${req.file.filename}`;
 
     inf.audienceBifurcation = {
-      malePercentage:   Number(malePercentage),
+      malePercentage: Number(malePercentage),
       femalePercentage: Number(femalePercentage)
     };
 
-    inf.categories   = interestDocs.map(d => d._id);
+    inf.categories = interestDocs.map(d => d._id);
     inf.categoryName = interestDocs.map(d => d.name);
 
     inf.audienceAgeRangeId = ageRangeDoc._id;
-    inf.audienceAgeRange   = ageRangeDoc.range;
+    inf.audienceAgeRange = ageRangeDoc.range;
 
-    inf.audienceId    = countRangeDoc._id;
+    inf.audienceId = countRangeDoc._id;
     inf.audienceRange = countRangeDoc.range;
 
-    inf.countryId   = countryId;
-    inf.county      = countryDoc.countryName;
-    inf.callingId   = callingId;
+    inf.countryId = countryId;
+    inf.county = countryDoc.countryName;
+    inf.callingId = callingId;
     inf.callingcode = callingDoc.callingCode;
 
     inf.bio = bio;
 
-    // 7) assign free subscription
     const freePlan = await subscriptionHelper.getFreePlan('Influencer');
     if (freePlan) {
       inf.subscription = {
-        planId:    freePlan.planId,
-        planName:  freePlan.name,
+        planId: freePlan.planId,
+        planName: freePlan.name,
         startedAt: new Date(),
         expiresAt: subscriptionHelper.computeExpiry(freePlan),
-        features:  freePlan.features.map(f => ({
-          key:   f.key,
+        features: freePlan.features.map(f => ({
+          key: f.key,
           limit: typeof f.value === 'number' ? f.value : 0,
-          used:  0
+          used: 0
         }))
       };
       inf.subscriptionExpired = false;
     }
 
-    // 8) save & respond
     await inf.save();
     return res.status(201).json({
-      message:      'Influencer registered successfully',
+      message: 'Influencer registered successfully',
       influencerId: inf.influencerId,
       subscription: inf.subscription
     });
-
   } catch (err) {
     console.error('Error in registerInfluencer:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
 
-
-
-
-
-// Login an influencer
 exports.login = async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -297,7 +274,6 @@ exports.login = async (req, res) => {
   }
 
   try {
-    // 1) Find influencer by email, case‐insensitive
     const influencer = await Influencer.findOne({
       email: { $regex: `^${email.trim()}$`, $options: 'i' }
     });
@@ -305,20 +281,17 @@ exports.login = async (req, res) => {
       return res.status(404).json({ message: 'Influencer not found' });
     }
 
-    // 2) Check password
     const isMatch = await influencer.comparePassword(password);
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    // 3) Issue JWT
     const token = jwt.sign(
       { influencerId: influencer.influencerId, email: influencer.email },
       JWT_SECRET,
       { expiresIn: '100d' }
     );
 
-    // 4) Return profile + token
     return res.status(200).json({
       message: 'Login successful',
       influencerId: influencer.influencerId,
@@ -331,7 +304,6 @@ exports.login = async (req, res) => {
   }
 };
 
-// Middleware to verify JWT token
 exports.verifyToken = (req, res, next) => {
   const authHeader = req.headers['authorization'] || '';
   const token = authHeader.startsWith('Bearer ')
@@ -361,7 +333,6 @@ exports.getList = async (req, res) => {
   }
 };
 
-// Get a single influencer by influencerId
 exports.getById = async (req, res) => {
   const { id } = req.query;
   if (!id) {
@@ -379,7 +350,6 @@ exports.getById = async (req, res) => {
   }
 };
 
-
 exports.getCampaignsByInfluencer = async (req, res) => {
   try {
     const {
@@ -388,14 +358,13 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       limit = 10,
       search = '',
       sortBy = 'createdAt',
-      sortOrder = 'desc'    // 'asc' or 'desc'
+      sortOrder = 'desc'
     } = req.body;
 
     if (!influencerId) {
       return res.status(400).json({ message: 'influencerId is required' });
     }
 
-    // Build filter
     const filter = { influencerId };
     if (search.trim()) {
       filter.$or = [
@@ -406,11 +375,8 @@ exports.getCampaignsByInfluencer = async (req, res) => {
 
     const skip = (Math.max(page, 1) - 1) * Math.max(limit, 1);
     const sortDirection = sortOrder === 'asc' ? 1 : -1;
-
-    // Total count for pagination
     const total = await Campaign.countDocuments(filter);
 
-    // Fetch paged, sorted campaigns
     const campaigns = await Campaign.find(filter)
       .sort({ [sortBy]: sortDirection })
       .skip(skip)
@@ -428,29 +394,22 @@ exports.getCampaignsByInfluencer = async (req, res) => {
   }
 };
 
-
-
-
 exports.requestPasswordResetOtpInfluencer = async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: 'Email is required' });
 
-  // Find registered influencer (must have completed registration & password)
   const influencer = await Influencer.findOne({
     email: { $regex: `^${email.trim()}$`, $options: 'i' },
     name: { $exists: true, $ne: null },
     password: { $exists: true, $ne: null }
   });
 
-  // Always respond generic (don’t leak whether account exists)
   if (!influencer) {
-    return res.status(200).json({
-      message: 'Email not exist'
-    });
+    return res.status(200).json({ message: 'Email not exist' });
   }
 
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
   influencer.passwordResetCode = code;
   influencer.passwordResetExpiresAt = expiresAt;
@@ -464,19 +423,9 @@ exports.requestPasswordResetOtpInfluencer = async (req, res) => {
     text: `Your password reset OTP is ${code}. It expires in 10 minutes.`
   });
 
-  return res.status(200).json({
-    message: 'OTP has been sent.'
-  });
+  return res.status(200).json({ message: 'OTP has been sent.' });
 };
 
-
-/**
- * STEP B: Verify password reset OTP
- * POST /influencer/password/reset/verify
- * Body: { email, otp }
- *
- * On success returns a short-lived resetToken (JWT, ~15m).
- */
 exports.verifyPasswordResetOtpInfluencer = async (req, res) => {
   const { email, otp } = req.body;
   if (!email || otp == null) {
@@ -494,12 +443,10 @@ exports.verifyPasswordResetOtpInfluencer = async (req, res) => {
   }
 
   influencer.passwordResetVerified = true;
-  // Clear the OTP so it cannot be reused
   influencer.passwordResetCode = undefined;
   influencer.passwordResetExpiresAt = undefined;
   await influencer.save();
 
-  // Short-lived JWT authorizing password reset
   const resetToken = jwt.sign(
     { influencerId: influencer.influencerId, email: influencer.email, prt: true },
     JWT_SECRET,
@@ -509,14 +456,6 @@ exports.verifyPasswordResetOtpInfluencer = async (req, res) => {
   return res.status(200).json({ message: 'OTP verified', resetToken });
 };
 
-
-/**
- * STEP C: Complete password reset
- * POST /influencer/password/reset/complete
- * Body: { resetToken, newPassword, confirmPassword? }
- *
- * Requires token from STEP B. Updates password (hashed via schema hook).
- */
 exports.resetPasswordInfluencer = async (req, res) => {
   const { resetToken, newPassword, confirmPassword } = req.body;
   if (!resetToken || !newPassword) {
@@ -537,13 +476,12 @@ exports.resetPasswordInfluencer = async (req, res) => {
       return res.status(404).json({ message: 'Influencer not found' });
     }
 
-    // Defense in depth: confirm a verified reset happened
     if (!influencer.passwordResetVerified) {
       return res.status(400).json({ message: 'Password reset not verified' });
     }
 
-    influencer.password = newPassword; // hashed via pre-save hook
-    influencer.passwordResetVerified = false; // clear flag
+    influencer.password = newPassword;
+    influencer.passwordResetVerified = false;
     await influencer.save();
 
     return res.status(200).json({ message: 'Password reset successful' });
@@ -553,16 +491,13 @@ exports.resetPasswordInfluencer = async (req, res) => {
   }
 };
 
-
-
-
 exports.addPaymentMethod = async (req, res) => {
   try {
-    const { influencerId } = req.influencer || {}; // from verifyToken
+    const { influencerId } = req.influencer || {};
     const {
-      type,            // 0 = PayPal, 1 = Bank
-      bank = {},       // { accountHolder, accountNumber, ifsc, swift, bankName, branch, country }
-      paypal = {},     // { email, paypalId }
+      type,
+      bank = {},
+      paypal = {},
       isDefault = false
     } = req.body;
 
@@ -570,11 +505,9 @@ exports.addPaymentMethod = async (req, res) => {
       return res.status(400).json({ message: 'type must be 0 (PayPal) or 1 (Bank)' });
     }
 
-    // Fetch influencer doc
     const inf = await Influencer.findOne({ influencerId });
     if (!inf) return res.status(404).json({ message: 'Influencer not found' });
 
-    // Build payment object
     const paymentObj = {
       paymentId: uuidv4(),
       type: Number(type),
@@ -584,7 +517,6 @@ exports.addPaymentMethod = async (req, res) => {
     };
 
     if (Number(type) === 1) {
-      // Bank required fields
       const required = ['accountHolder', 'accountNumber', 'bankName'];
       for (const f of required) {
         if (!bank[f]?.trim()) {
@@ -601,7 +533,6 @@ exports.addPaymentMethod = async (req, res) => {
         country: bank.country?.trim()
       };
     } else {
-      // PayPal required fields
       if (!paypal.email?.trim()) {
         return res.status(400).json({ message: 'paypal.email is required' });
       }
@@ -611,15 +542,12 @@ exports.addPaymentMethod = async (req, res) => {
       };
     }
 
-    // If setting default, clear others
     if (paymentObj.isDefault) {
       inf.paymentMethods.forEach(pm => (pm.isDefault = false));
     } else {
-      // If user has no payment methods yet, force first one as default
       if (inf.paymentMethods.length === 0) paymentObj.isDefault = true;
     }
 
-    // Push and save
     inf.paymentMethods.push(paymentObj);
     await inf.save();
 
@@ -633,8 +561,6 @@ exports.addPaymentMethod = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
-
-
 
 exports.deletePaymentMethod = async (req, res) => {
   try {
@@ -650,7 +576,6 @@ exports.deletePaymentMethod = async (req, res) => {
     const wasDefault = inf.paymentMethods[idx].isDefault;
     inf.paymentMethods.splice(idx, 1);
 
-    // If we deleted default, mark first remaining as default (if any)
     if (wasDefault && inf.paymentMethods.length > 0) {
       inf.paymentMethods[0].isDefault = true;
     }
@@ -663,13 +588,12 @@ exports.deletePaymentMethod = async (req, res) => {
   }
 };
 
-
 const mask = (val = '', keep = 4) =>
   val.length <= keep ? val : '*'.repeat(val.length - keep) + val.slice(-keep);
 
 exports.viewPaymentByType = async (req, res) => {
   try {
-    const requester = req.influencer;                 // from verifyToken
+    const requester = req.influencer;
     const { influencerId, type } = req.body || {};
 
     if (!influencerId) {
@@ -679,7 +603,6 @@ exports.viewPaymentByType = async (req, res) => {
       return res.status(400).json({ message: 'type must be 0 (PayPal) or 1 (Bank)' });
     }
 
-    // self-only (adjust for admin roles if needed)
     if (!requester || requester.influencerId !== influencerId) {
       return res.status(403).json({ message: 'Forbidden' });
     }
@@ -690,10 +613,8 @@ exports.viewPaymentByType = async (req, res) => {
     );
     if (!inf) return res.status(404).json({ message: 'Influencer not found' });
 
-    // Filter by type
     let filtered = inf.paymentMethods.filter(pm => pm.type === Number(type));
 
-    // Mask accountNumber for bank type
     if (Number(type) === 1) {
       filtered = filtered.map(pm => {
         const obj = pm.toObject();
@@ -715,17 +636,15 @@ exports.viewPaymentByType = async (req, res) => {
   }
 };
 
-
-
 exports.updatePaymentMethod = async (req, res) => {
   try {
-    const { influencerId } = req.influencer; // from verifyToken
+    const { influencerId } = req.influencer || {};
     const {
       paymentId,
-      type,                 // 0 = PayPal, 1 = Bank
-      bank = {},            // fields to update if type === 1
-      paypal = {},          // fields to update if type === 0
-      isDefault             // optional boolean
+      type,
+      bank = {},
+      paypal = {},
+      isDefault
     } = req.body || {};
 
     if (!paymentId) {
@@ -744,7 +663,6 @@ exports.updatePaymentMethod = async (req, res) => {
     pm.type = Number(type);
 
     if (pm.type === 1) {
-      // Bank required fields
       const required = ['accountHolder', 'accountNumber', 'bankName'];
       for (const f of required) {
         const val = bank[f] !== undefined ? bank[f] : pm.bank?.[f];
@@ -755,15 +673,14 @@ exports.updatePaymentMethod = async (req, res) => {
       pm.bank = {
         accountHolder: bank.accountHolder ?? pm.bank?.accountHolder,
         accountNumber: bank.accountNumber ?? pm.bank?.accountNumber,
-        ifsc:          bank.ifsc ?? pm.bank?.ifsc,
-        swift:         bank.swift ?? pm.bank?.swift,
-        bankName:      bank.bankName ?? pm.bank?.bankName,
-        branch:        bank.branch ?? pm.bank?.branch,
-        country:       bank.country ?? pm.bank?.country
+        ifsc: bank.ifsc ?? pm.bank?.ifsc,
+        swift: bank.swift ?? pm.bank?.swift,
+        bankName: bank.bankName ?? pm.bank?.bankName,
+        branch: bank.branch ?? pm.bank?.branch,
+        country: bank.country ?? pm.bank?.country
       };
       pm.paypal = undefined;
     } else {
-      // PayPal required field
       const emailVal = paypal.email ?? pm.paypal?.email;
       if (!emailVal || !String(emailVal).trim()) {
         return res.status(400).json({ message: 'paypal.email is required' });
@@ -782,7 +699,7 @@ exports.updatePaymentMethod = async (req, res) => {
       } else {
         pm.isDefault = false;
         if (!inf.paymentMethods.some(x => x.isDefault)) {
-          pm.isDefault = true; // keep at least one default
+          pm.isDefault = true;
         }
       }
     }
@@ -800,17 +717,13 @@ exports.updatePaymentMethod = async (req, res) => {
   }
 };
 
-
-
-
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
 exports.searchInfluencers = async (req, res) => {
   try {
-    const requester = req.brand;               // from brandCtrl.verifyToken
+    const requester = req.brand;
     const { search, brandId } = req.body || {};
 
-    // 1) Validate brandId
     if (!brandId) {
       return res.status(400).json({ message: 'brandId is required' });
     }
@@ -818,35 +731,63 @@ exports.searchInfluencers = async (req, res) => {
       return res.status(403).json({ message: 'Forbidden' });
     }
 
-    // 2) Validate search term
     if (!search || !String(search).trim()) {
       return res.status(400).json({ message: 'search is required' });
     }
 
-    // 3) Debounce delay
     await delay(300);
 
-    // 4) Perform query
     const regex = new RegExp(search.trim(), 'i');
     const docs = await Influencer
       .find({ name: regex }, 'name influencerId')
       .limit(10)
       .lean();
 
-    // 5) No results
     if (docs.length === 0) {
       return res.status(404).json({ message: 'No influencers found' });
     }
 
-    // 6) Map and respond
     const results = docs.map(d => ({
       name: d.name,
       influencerId: d.influencerId
     }));
     return res.json({ results });
-
   } catch (err) {
     console.error('Error in searchInfluencers:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+exports.searchBrands = async (req, res) => {
+  try {
+    const requester = req.influencer;
+    const { search } = req.body || {};
+
+    if (!requester || !requester.influencerId) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
+    if (!search || !String(search).trim()) {
+      return res.status(400).json({ message: 'search is required' });
+    }
+
+    await delay(300);
+
+    const regex = new RegExp(search.trim(), 'i');
+    const docs = await Brand.find({ name: regex }, 'name brandId')
+      .limit(10)
+      .lean();
+
+    if (docs.length === 0) {
+      return res.status(404).json({ message: 'No brands found' });
+    }
+
+    const results = docs.map(d => ({
+      name: d.name,
+      brandId: d.brandId
+    }));
+    return res.json({ results });
+  } catch (err) {
+    console.error('Error in searchBrands:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };

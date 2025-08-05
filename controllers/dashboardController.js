@@ -1,39 +1,70 @@
 // controllers/dashboardController.js
-const Brand      = require('../models/brand');
-const Campaign = require('../models/campaign');
-const Influencer = require('../models/influencer');
-const Milestone  = require('../models/milestone');
+require('dotenv').config();
+const jwt         = require('jsonwebtoken');
+const { JWT_SECRET } = process.env;
+const mongoose   = require('mongoose');  
+const Brand       = require('../models/brand');
+const Campaign    = require('../models/campaign');
+const Influencer  = require('../models/influencer');
+const Milestone   = require('../models/milestone');
+const Contract   = require('../models/contract');
 
-exports.getDashboard=async (req, res)=> {
+
+/**
+ * Generic JWT verifier — populates req.user with the decoded token.
+ */
+exports.verifyToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'] || '';
+  if (!authHeader.startsWith('Bearer ')) {
+    return res.status(403).json({ message: 'Token required' });
+  }
+  const token = authHeader.slice(7);
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    return next();
+  } catch {
+    return res.status(403).json({ message: 'Invalid or expired token' });
+  }
+};
+
+
+/**
+ * Brand dashboard:
+ * - Requires req.user.brandId === body.brandId
+ */
+exports.getDashboard = async (req, res) => {
   try {
     const { brandId } = req.body;
     if (!brandId) {
       return res.status(400).json({ error: 'brandId is required in the request body' });
     }
 
-    // 1. Find the brand and get its name
+    // enforce that the token is for this brand
+    if (!req.user?.brandId || req.user.brandId !== brandId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // 1) Fetch brand name
     const brand = await Brand.findOne({ brandId });
     if (!brand) {
       return res.status(404).json({ error: 'Brand not found' });
     }
-    const brandName = brand.name;
 
-    // 2. Count active campaigns for this brand
+    // 2) Count active campaigns
     const totalActiveCampaigns = await Campaign.countDocuments({
       brandId,
       isActive: 1
     });
 
-    // 3. Count all influencers in the database
+    // 3) Total influencers
     const totalInfluencers = await Influencer.countDocuments();
 
-    // 4. Get wallet balance (budget remaining) for this brand
+    // 4) Budget remaining
     const milestone = await Milestone.findOne({ brandId });
-    const budgetRemaining = milestone ? milestone.walletBalance : 0;
+    const budgetRemaining = milestone?.walletBalance ?? 0;
 
-    // 5. Respond with the dashboard data
     return res.status(200).json({
-      brandName,
+      brandName:            brand.name,
       totalActiveCampaigns,
       totalInfluencers,
       budgetRemaining
@@ -43,72 +74,80 @@ exports.getDashboard=async (req, res)=> {
     console.error('Dashboard error:', err);
     return res.status(500).json({ error: 'Server error' });
   }
-}
+};
 
+
+/**
+ * Influencer dashboard:
+ * - Requires req.user.influencerId === body.influencerId
+ */
 exports.getDashboardInf = async (req, res) => {
   try {
-    // pull raw value from body and normalize
-    let { influencerId } = req.body;
+    /* 0. Auth-guard */
+    const { influencerId } = req.user || {};
     if (!influencerId) {
-      return res.status(400).json({ message: 'influencerId is required in body' });
-    }
-    influencerId = String(influencerId).trim();
-
-    // ensure the caller is that influencer
-    const tokenInfId = String(req.influencer?.influencerId || '').trim();
-    if (!tokenInfId || tokenInfId !== influencerId) {
       return res.status(403).json({ message: 'Forbidden' });
     }
 
-    // now fetch all campaigns for this influencer
-    const campaigns = await Campaign.find({ influencerId }).lean();
+    /* 1. Convenience dates */
+    const now              = new Date();
+    const firstOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-    const now = new Date();
-    // next payout cycle: first day of next month (adjust as needed)
-    const nextPayoutDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-
-    let activeCampaigns = 0;
-    let pendingApprovals = 0;
-    let totalEarnings = 0;
-    let upcomingPayouts = 0;
-
-    campaigns.forEach(c => {
-      if (c.timeline?.startDate <= now && now <= c.timeline?.endDate) {
-        activeCampaigns++;
-      }
-      if (c.isContracted === true && c.isAccepted === false) {
-        pendingApprovals++;
-      }
-      (c.milestones || []).forEach(m => {
-        if (m.released === true) {
-          totalEarnings += m.amount || 0;
-        }
-        if (
-          m.accepted === true &&
-          m.released === false &&
-          m.dueDate &&
-          new Date(m.dueDate) <= nextPayoutDate
-        ) {
-          upcomingPayouts += m.amount || 0;
-        }
-      });
+    /* 2. Pending approvals  = contracts *assigned* but not yet accepted */
+    const pendingApprovals = await Contract.countDocuments({
+      influencerId,
+      isAssigned: 1,
+      isAccepted: 0
     });
 
-    // format money (USD); adjust locale/currency if needed
-    const fmt = amt =>
-      Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: 2
-      }).format(amt);
+    /* 3. Accepted contracts → decide “active” by campaign timeline     */
+    const acceptedContracts = await Contract.find(
+      { influencerId, isAccepted: 1 },
+      'campaignId'
+    ).lean();
 
+    const activeCampaigns = await Campaign.countDocuments({
+      campaignsId: { $in: acceptedContracts.map(c => c.campaignId) },
+      'timeline.startDate': { $lte: now },
+      $or: [
+        { 'timeline.endDate': { $exists: false } },
+        { 'timeline.endDate': { $gte: now } }
+      ]
+    });
+
+    /* 4. Milestone aggregates (released / upcoming) */
+    const [releasedAgg] = await Milestone.aggregate([
+      { $unwind: '$milestoneHistory' },
+      { $match: {
+          'milestoneHistory.influencerId': influencerId,
+          'milestoneHistory.released': true
+      }},
+      { $group: { _id: null, total: { $sum: '$milestoneHistory.amount' } } }
+    ]);
+
+    const [upcomingAgg] = await Milestone.aggregate([
+      { $unwind: '$milestoneHistory' },
+      { $match: {
+          'milestoneHistory.influencerId': influencerId,
+          'milestoneHistory.released': false,
+          'milestoneHistory.accepted': true,
+          'milestoneHistory.dueDate': { $lte: firstOfNextMonth }
+      }},
+      { $group: { _id: null, total: { $sum: '$milestoneHistory.amount' } } }
+    ]);
+
+    const totalEarnings   = releasedAgg?.total  || 0;
+    const upcomingPayouts = upcomingAgg?.total  || 0;
+
+    /* 5. Response */
     return res.status(200).json({
       influencerId,
       activeCampaigns,
       pendingApprovals,
-      totalEarnings: fmt(totalEarnings),
-      upcomingPayouts: fmt(upcomingPayouts)
+      totalEarnings,
+      upcomingPayouts
     });
+
   } catch (err) {
     console.error('Error in getDashboardInf:', err);
     return res.status(500).json({ message: 'Internal server error' });

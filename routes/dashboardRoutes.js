@@ -1,10 +1,13 @@
 // routes/dashboard.js
 const express = require('express');
 const router  = express.Router();
-const { getDashboard,getDashboardInf } = require('../controllers/dashboardController');
+const {
+  verifyToken,
+  getDashboard,
+  getDashboardInf
+} = require('../controllers/dashboardController');
 
-router.post('/brand', getDashboard);
-
-router.post('/influencer', getDashboardInf);
+router.post('/brand',       verifyToken, getDashboard);
+router.post('/influencer',  verifyToken, getDashboardInf);
 
 module.exports = router;

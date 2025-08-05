@@ -30,7 +30,17 @@ const milestoneHistorySchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-}, { _id: false });
+  released: {
+    type: Boolean,
+    default: false
+  },
+  releasedAt: {
+    type: Date
+  }
+}, { 
+  _id: false,        // you still key off milestoneHistoryId  
+  timestamps: true   // adds createdAt & updatedAt on each sub‐doc
+});
 
 const milestoneSchema = new mongoose.Schema({
   milestoneId: {

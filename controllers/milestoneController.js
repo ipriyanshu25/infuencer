@@ -221,3 +221,65 @@ exports.getWalletBalance = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+exports.releaseMilestone = async (req, res) => {
+  const { milestoneId, milestoneHistoryId } = req.body;
+  if (!milestoneId || !milestoneHistoryId) {
+    return res.status(400).json({ message: 'milestoneId and milestoneHistoryId are required.' });
+  }
+
+  try {
+    const doc = await Milestone.findOne({ milestoneId });
+    if (!doc) {
+      return res.status(404).json({ message: 'Milestone not found.' });
+    }
+
+    // find the specific history entry
+    const entry = doc.milestoneHistory.find(h => h.milestoneHistoryId === milestoneHistoryId);
+    if (!entry) {
+      return res.status(404).json({ message: 'Milestone history entry not found.' });
+    }
+    if (entry.released) {
+      return res.status(400).json({ message: 'This milestone has already been released.' });
+    }
+
+    // deduct from brand wallet
+    doc.walletBalance -= entry.amount;
+
+    // mark as released
+    entry.released = true;
+    entry.releasedAt = new Date();
+
+    await doc.save();
+
+    return res.status(200).json({
+      message: 'Milestone released successfully.',
+      releasedAmount: entry.amount
+    });
+  } catch (err) {
+    console.error('Error in releaseMilestone:', err);
+    return res.status(500).json({ message: 'Internal server error.' });
+  }
+};
+
+
+exports.getInfluencerPaidTotal = async (req, res) => {
+  const { influencerId } = req.body;
+  if (!influencerId) {
+    return res.status(400).json({ message: 'influencerId is required.' });
+  }
+  try {
+    const docs = await Milestone.find({ 'milestoneHistory.influencerId': influencerId });
+    let totalPaid = 0;
+    docs.forEach(d => {
+      d.milestoneHistory
+       .filter(e => e.influencerId === influencerId && e.released)
+       .forEach(e => { totalPaid += e.amount; });
+    });
+    return res.json({ influencerId, totalPaid });
+  } catch(err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Internal server error.' });
+  }
+};

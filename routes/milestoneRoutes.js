@@ -6,7 +6,9 @@ const {
   getWalletBalance,
   getMilestonesByInfluencerAndCampaign,
   getMilestonesByInfluencer,
-  getMilestonesByBrand
+  getMilestonesByBrand,
+  releaseMilestone,
+  getInfluencerPaidTotal
 } = require('../controllers/milestoneController');
 
 // create a new milestone
@@ -23,5 +25,10 @@ router.post('/getMilestome',getMilestonesByInfluencerAndCampaign);
 router.post('/byInfluencer',getMilestonesByInfluencer);
 
 router.post('/byBrand', getMilestonesByBrand);
+
+router.post('/release', releaseMilestone);
+
+// get total amount paid to an influencer
+router.post('/influencer', getInfluencerPaidTotal);
 
 module.exports = router;

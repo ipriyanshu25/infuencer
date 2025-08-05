@@ -1260,62 +1260,52 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
   }
 
   try {
-    // 1) Fetch contracts where influencer was assigned but hasn't accepted yet and not rejected
+    // 1) Fetch all assigned, not-rejected contracts
     const contracts = await Contract.find(
       {
         influencerId,
         isAssigned: 1,
-        isAccepted: 0,
         isRejected: { $ne: 1 }
       },
-      'campaignId contractId feeAmount'
+      'campaignId contractId feeAmount isAccepted'
     ).lean();
 
+    // 2) Filter out campaigns the influencer hasn't applied to
     const campaignIds = contracts.map(c => c.campaignId.toString());
     if (!campaignIds.length) {
-      return res.json({
-        meta: { total: 0, page: +page, limit: +limit, totalPages: 0 },
-        campaigns: []
-      });
+      return res.json({ meta: { total: 0, page: +page, limit: +limit, totalPages: 0 }, campaigns: [] });
     }
-
-    // 2) Ensure influencer had applied to these campaigns
     const applyRecs = await ApplyCampaign.find(
-      {
-        campaignId: { $in: campaignIds },
-        'applicants.influencerId': influencerId
-      },
+      { campaignId: { $in: campaignIds }, 'applicants.influencerId': influencerId },
       'campaignId'
     ).lean();
-    const appliedIds = new Set(applyRecs.map(r => r.campaignId.toString()));
-    const filteredIds = campaignIds.filter(id => appliedIds.has(id));
-    if (!filteredIds.length) {
-      return res.json({
-        meta: { total: 0, page: +page, limit: +limit, totalPages: 0 },
-        campaigns: []
-      });
-    }
-
-    // 3) Exclude campaigns that already have a milestone
-    const milestoneIds = await milestoneSetForInfluencer(influencerId, filteredIds);
-    const remainingIds = filteredIds.filter(id => !milestoneIds.has(id));
+    const appliedSet = new Set(applyRecs.map(r => r.campaignId.toString()));
+    let remainingIds = campaignIds.filter(id => appliedSet.has(id));
     if (!remainingIds.length) {
-      return res.json({
-        meta: { total: 0, page: +page, limit: +limit, totalPages: 0 },
-        campaigns: []
-      });
+      return res.json({ meta: { total: 0, page: +page, limit: +limit, totalPages: 0 }, campaigns: [] });
     }
 
-    // 4) Map contract details for annotations
+    // 3) Exclude those with existing milestones
+    const milestoneIds = await milestoneSetForInfluencer(influencerId, remainingIds);
+    remainingIds = remainingIds.filter(id => !milestoneIds.has(id));
+    if (!remainingIds.length) {
+      return res.json({ meta: { total: 0, page: +page, limit: +limit, totalPages: 0 }, campaigns: [] });
+    }
+
+    // 4) Map contract details
     const contractMap = new Map();
     contracts.forEach(c => {
       const cid = c.campaignId.toString();
       if (remainingIds.includes(cid)) {
-        contractMap.set(cid, { contractId: c.contractId, feeAmount: c.feeAmount });
+        contractMap.set(cid, {
+          contractId: c.contractId,
+          feeAmount: c.feeAmount,
+          isAccepted: c.isAccepted
+        });
       }
     });
 
-    // 5) Build campaign filter with optional search
+    // 5) Search filter and pagination
     const filter = { campaignsId: { $in: remainingIds } };
     if (search?.trim()) {
       const term = search.trim();
@@ -1327,8 +1317,6 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
       if (!isNaN(num)) or.push({ budget: { $lte: num } });
       filter.$or = or;
     }
-
-    // 6) Query campaigns with pagination
     const pageNum = Math.max(1, parseInt(page, 10));
     const limNum = Math.max(1, parseInt(limit, 10));
     const skip = (pageNum - 1) * limNum;
@@ -1343,27 +1331,23 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
         .lean()
     ]);
 
-    // 7) Annotate and respond
+    // 6) Annotate and return
     const campaigns = rawCampaigns.map(c => {
-      const details = contractMap.get(c.campaignsId);
+      const details = contractMap.get(c.campaignsId.toString());
       return {
         ...c,
         hasApplied: 1,
         isContracted: 1,
-        isAccepted: 0,
+        isAccepted: details?.isAccepted || 0,
         hasMilestone: 0,
         contractId: details?.contractId || null,
-        feeAmount: details?.feeAmount || 0
+        feeAmount: details?.feeAmount || 0,
+        canAccept: details?.isAccepted === 0 // flag indicating acceptance availability
       };
     });
 
     return res.json({
-      meta: {
-        total,
-        page: pageNum,
-        limit: limNum,
-        totalPages: Math.ceil(total / limNum)
-      },
+      meta: { total, page: pageNum, limit: limNum, totalPages: Math.ceil(total / limNum) },
       campaigns
     });
   } catch (err) {
@@ -1371,6 +1355,7 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
 
 
 

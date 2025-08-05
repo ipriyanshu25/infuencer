@@ -14,6 +14,7 @@ const Contract = require('../models/contract');
 const SubscriptionPlan = require('../models/subscription');
 const getFeature = require('../utils/getFeature');
 const Milestone = require('../models/milestone');
+const Country = require('../models/country');
 
 
 // ===============================
@@ -128,10 +129,9 @@ exports.createCampaign = (req, res) => {
         return res.status(500).json({ message: 'Subscription plan not found.' });
       }
 
-      // 3) Enforce “live_campaigns_limit”
-      // 3) Enforce “live_campaigns_limit” **per subscription cycle**
+      // 3) Enforce “live_campaigns_limit” per subscription cycle
       const liveCap = getFeature.getFeature(brand.subscription, 'live_campaigns_limit');
-      const limit = liveCap ? liveCap.limit : 0;           // 0 → unlimited
+      const limit = liveCap ? liveCap.limit : 0;
       const used = liveCap ? liveCap.used : 0;
       if (limit > 0 && used >= limit) {
         return res.status(403).json({
@@ -139,19 +139,35 @@ exports.createCampaign = (req, res) => {
         });
       }
 
-      // 4) Parse & normalize targetAudience JSON
-      let audienceData = { age: { MinAge: 0, MaxAge: 0 }, gender: 2, location: '' };
+      // 4) Parse & normalize targetAudience JSON, now handling multiple locations
+      let audienceData = { age: { MinAge: 0, MaxAge: 0 }, gender: 2, locations: [] };
       if (targetAudience) {
         let ta = targetAudience;
         if (typeof ta === 'string') {
           try { ta = JSON.parse(ta); }
           catch { return res.status(400).json({ message: 'Invalid JSON in targetAudience.' }); }
         }
-        const { age, gender, location } = ta;
+        const { age, gender, locations } = ta;
         if (age?.MinAge != null) audienceData.age.MinAge = Number(age.MinAge) || 0;
         if (age?.MaxAge != null) audienceData.age.MaxAge = Number(age.MaxAge) || 0;
         if ([0, 1, 2].includes(gender)) audienceData.gender = gender;
-        if (typeof location === 'string') audienceData.location = location.trim();
+
+        // Fetch country names for each provided countryId
+        if (Array.isArray(locations)) {
+          for (const countryId of locations) {
+            if (!mongoose.Types.ObjectId.isValid(countryId)) {
+              return res.status(400).json({ message: `Invalid countryId: ${countryId}` });
+            }
+            const country = await Country.findById(countryId);
+            if (!country) {
+              return res.status(404).json({ message: `Country not found: ${countryId}` });
+            }
+            audienceData.locations.push({
+              countryId: country._id,
+              countryName: country.countryName
+            });
+          }
+        }
       }
 
       // 5) Parse & validate interestId array
@@ -222,12 +238,14 @@ exports.createCampaign = (req, res) => {
 
       await newCampaign.save();
 
+      // 10) Update usage count if needed
       if (limit > 0) {
         await Brand.updateOne(
           { brandId, 'subscription.features.key': 'live_campaigns_limit' },
           { $inc: { 'subscription.features.$.used': 1 } }
         );
       }
+
       return res.status(201).json({ message: 'Campaign created successfully.' });
 
     } catch (error) {
@@ -236,6 +254,7 @@ exports.createCampaign = (req, res) => {
     }
   });
 };
+
 
 // ===============================
 //  GET ALL CAMPAIGNS
@@ -1337,11 +1356,11 @@ exports.getCampaignsByFilter = async (req, res) => {
     // 1) Extract and normalize input
     const {
       interestIds = [],
-      gender,          // 0 = female, 1 = male, 2 = all
+      gender,            // 0 = female, 1 = male, 2 = all
       minAge,
       maxAge,
-      ageMode = 'containment', // "overlap" (default) or "containment"
-      location,
+      ageMode = 'containment', // "overlap" or "containment"
+      location,         // countryName substring filter
       goal,
       minBudget,
       maxBudget,
@@ -1355,45 +1374,40 @@ exports.getCampaignsByFilter = async (req, res) => {
     // 2) Build filter
     const filter = {};
 
-    // interest/category filter
+    // interest filter
     if (Array.isArray(interestIds) && interestIds.length) {
       const valid = interestIds.filter(id => mongoose.Types.ObjectId.isValid(id));
-      if (valid.length) {
-        filter.interestId = { $in: valid };
-      }
+      if (valid.length) filter.interestId = { $in: valid };
     }
 
-    // gender (only apply if 0 or 1)
-    if ([0, 1].includes(Number(gender))) {
-      filter['targetAudience.gender'] = Number(gender);
-    }
+    // gender filter
+    if ([0, 1].includes(Number(gender))) filter['targetAudience.gender'] = Number(gender);
 
     // age filtering
     const minA = Number(minAge);
     const maxA = Number(maxAge);
     if (!isNaN(minA) || !isNaN(maxA)) {
       if (ageMode === 'containment') {
-        // campaign's audience range must fit entirely within [minA, maxA]
         if (!isNaN(minA)) filter['targetAudience.age.MinAge'] = { $gte: minA };
         if (!isNaN(maxA)) filter['targetAudience.age.MaxAge'] = { $lte: maxA };
       } else {
-        // overlap semantics (default): ranges intersect
         if (!isNaN(maxA)) filter['targetAudience.age.MinAge'] = { $lte: maxA };
         if (!isNaN(minA)) filter['targetAudience.age.MaxAge'] = { $gte: minA };
       }
     }
 
-    // location (case-insensitive substring)
+    // location filtering (on countryName in locations array)
     if (location && typeof location === 'string' && location.trim()) {
-      filter['targetAudience.location'] = { $regex: location.trim(), $options: 'i' };
+      const term = location.trim();
+      filter['targetAudience.locations'] = {
+        $elemMatch: { countryName: { $regex: term, $options: 'i' } }
+      };
     }
 
-    // goal
-    if (goal && ALLOWED_GOALS.includes(goal)) {
-      filter.goal = goal;
-    }
+    // goal filter
+    if (goal && ALLOWED_GOALS.includes(goal)) filter.goal = goal;
 
-    // budget
+    // budget filtering
     const minB = Number(minBudget);
     const maxB = Number(maxBudget);
     if (!isNaN(minB) || !isNaN(maxB)) {
@@ -1411,7 +1425,7 @@ exports.getCampaignsByFilter = async (req, res) => {
         { interestName: { $regex: term, $options: 'i' } }
       ];
       const num = Number(term);
-      if (!isNaN(num)) or.push({ budget: { $lte: num } }); // numeric → budget ceiling
+      if (!isNaN(num)) or.push({ budget: { $lte: num } });
       filter.$or = or;
     }
 
@@ -1424,7 +1438,7 @@ exports.getCampaignsByFilter = async (req, res) => {
     const sortDir = sortOrder === 'asc' ? 1 : -1;
     const sortObj = { [sortField]: sortDir };
 
-    // 4) Execute queries in parallel
+    // 4) Execute queries
     const [total, campaigns] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
@@ -1447,8 +1461,6 @@ exports.getCampaignsByFilter = async (req, res) => {
     });
   } catch (err) {
     console.error('Error in getCampaignsByFilter:', err);
-    return res.status(500).json({
-      message: 'Internal server error while filtering campaigns.'
-    });
+    return res.status(500).json({ message: 'Internal server error while filtering campaigns.' });
   }
 };

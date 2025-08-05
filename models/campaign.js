@@ -14,7 +14,19 @@ const targetAudienceSchema = new mongoose.Schema({
     required: true,
     default: 2
   },
-  location: { type: String }
+  locations: [
+    {
+      countryId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Country',
+        required: true
+      },
+      countryName: {
+        type: String,
+        required: true
+      }
+    }
+  ]
 });
 
 const campaignSchema = new mongoose.Schema({

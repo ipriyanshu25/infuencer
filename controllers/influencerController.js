@@ -496,8 +496,7 @@ exports.resetPasswordInfluencer = async (req, res) => {
 
 exports.addPaymentMethod = async (req, res) => {
   try {
-    const { influencerId } = req.influencer || {};
-    const { type, bank = {}, paypal = {}, isDefault = false } = req.body;
+    const { type, bank = {}, paypal = {}, isDefault = false ,influencerId} = req.body;
 
     // validate type
     if (![0, 1].includes(Number(type))) {
@@ -540,7 +539,7 @@ exports.addPaymentMethod = async (req, res) => {
         bankName: bank.bankName.trim(),
         branch: bank.branch?.trim(),
         countryId: countryDoc._id,              // store the ObjectId
-        countryName: countryDoc.name            // store the fetched name
+        countryName: countryDoc.countryName            // store the fetched name
       };
 
     } else {

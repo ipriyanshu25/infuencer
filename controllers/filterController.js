@@ -43,10 +43,13 @@ exports.getFilteredInfluencers = async (req, res) => {
     if (typeof ageGroup === 'string') {
       filter.audienceAgeRange = ageGroup;
     }
-    if ([0,1,2].includes(gender)) {
+    if ([0, 1, 2].includes(gender)) {
       filter.gender = gender;
     }
-    if (countryId) {
+    // Support single or multiple country IDs via countryId field
+    if (Array.isArray(countryId) && countryId.length) {
+      filter.countryId = { $in: countryId };
+    } else if (countryId) {
       filter.countryId = countryId;
     }
     if (platformId) {
@@ -80,7 +83,7 @@ exports.getFilteredInfluencers = async (req, res) => {
       Influencer.find(filter)
                 .skip(skip)
                 .limit(perPage)
-                .sort({ audienceRange: 1 })    // optional: sort by audienceRange
+                .sort({ audienceRange: 1 })
     ]);
 
     const totalPages = Math.ceil(totalCount / perPage);

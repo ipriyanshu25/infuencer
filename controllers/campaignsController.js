@@ -1367,11 +1367,12 @@ exports.getCampaignsByFilter = async (req, res) => {
     // 1) Extract and normalize input
     const {
       interestIds = [],
-      gender,            // 0 = female, 1 = male, 2 = all
+      gender,
       minAge,
       maxAge,
       ageMode = 'containment', // "overlap" or "containment"
-      location,         // countryName substring filter
+      // users can enter single or multiple country IDs
+      countryId,
       goal,
       minBudget,
       maxBudget,
@@ -1407,11 +1408,19 @@ exports.getCampaignsByFilter = async (req, res) => {
       }
     }
 
-    // location filtering (on countryName in locations array)
-    if (location && typeof location === 'string' && location.trim()) {
-      const term = location.trim();
+    // location / countryId filtering
+    if (Array.isArray(countryId) && countryId.length) {
+      const validIds = countryId
+        .filter(id => mongoose.Types.ObjectId.isValid(id))
+        .map(id => mongoose.Types.ObjectId(id));
+      if (validIds.length) {
+        filter['targetAudience.locations'] = {
+          $elemMatch: { countryId: { $in: validIds } }
+        };
+      }
+    } else if (countryId && mongoose.Types.ObjectId.isValid(countryId)) {
       filter['targetAudience.locations'] = {
-        $elemMatch: { countryName: { $regex: term, $options: 'i' } }
+        $elemMatch: { countryId: mongoose.Types.ObjectId(countryId) }
       };
     }
 
@@ -1475,3 +1484,4 @@ exports.getCampaignsByFilter = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error while filtering campaigns.' });
   }
 };
+

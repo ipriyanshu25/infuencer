@@ -1410,17 +1410,19 @@ exports.getCampaignsByFilter = async (req, res) => {
 
     // location / countryId filtering
     if (Array.isArray(countryId) && countryId.length) {
+      // filter for multiple country IDs
       const validIds = countryId
         .filter(id => mongoose.Types.ObjectId.isValid(id))
-        .map(id => mongoose.Types.ObjectId(id));
+        .map(id => new mongoose.Types.ObjectId(id));
       if (validIds.length) {
         filter['targetAudience.locations'] = {
           $elemMatch: { countryId: { $in: validIds } }
         };
       }
     } else if (countryId && mongoose.Types.ObjectId.isValid(countryId)) {
+      // filter for single country ID
       filter['targetAudience.locations'] = {
-        $elemMatch: { countryId: mongoose.Types.ObjectId(countryId) }
+        $elemMatch: { countryId: new mongoose.Types.ObjectId(countryId) }
       };
     }
 
@@ -1484,4 +1486,3 @@ exports.getCampaignsByFilter = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error while filtering campaigns.' });
   }
 };
-

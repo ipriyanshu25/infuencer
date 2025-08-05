@@ -1255,51 +1255,68 @@ exports.getAcceptedInfluencers = async (req, res) => {
 
 exports.getContractedCampaignsByInfluencer = async (req, res) => {
   const { influencerId, search, page = 1, limit = 10 } = req.body;
-  if (!influencerId) return res.status(400).json({ message: 'influencerId is required' });
+  if (!influencerId) {
+    return res.status(400).json({ message: 'influencerId is required' });
+  }
 
   try {
-    // Contracts assigned to this influencer (accepted state does NOT matter here)
+    // 1) Fetch contracts where influencer was assigned but hasn't accepted yet and not rejected
     const contracts = await Contract.find(
-      { influencerId, isAssigned: 1, isRejected: { $ne: 1 } },
+      {
+        influencerId,
+        isAssigned: 1,
+        isAccepted: 0,
+        isRejected: { $ne: 1 }
+      },
       'campaignId contractId feeAmount'
     ).lean();
 
-    let campaignIds = contracts.map(c => toStr(c.campaignId));
+    const campaignIds = contracts.map(c => c.campaignId.toString());
     if (!campaignIds.length) {
-      return res.json({ meta: { total: 0, page: +page, limit: +limit, totalPages: 0 }, campaigns: [] });
+      return res.json({
+        meta: { total: 0, page: +page, limit: +limit, totalPages: 0 },
+        campaigns: []
+      });
     }
 
-    // Only campaigns the influencer applied to
+    // 2) Ensure influencer had applied to these campaigns
     const applyRecs = await ApplyCampaign.find(
-      { campaignId: { $in: campaignIds }, 'applicants.influencerId': influencerId },
+      {
+        campaignId: { $in: campaignIds },
+        'applicants.influencerId': influencerId
+      },
       'campaignId'
     ).lean();
-    const appliedIds = new Set(applyRecs.map(r => toStr(r.campaignId)));
-    campaignIds = campaignIds.filter(id => appliedIds.has(id));
-    if (!campaignIds.length) {
-      return res.json({ meta: { total: 0, page: +page, limit: +limit, totalPages: 0 }, campaigns: [] });
+    const appliedIds = new Set(applyRecs.map(r => r.campaignId.toString()));
+    const filteredIds = campaignIds.filter(id => appliedIds.has(id));
+    if (!filteredIds.length) {
+      return res.json({
+        meta: { total: 0, page: +page, limit: +limit, totalPages: 0 },
+        campaigns: []
+      });
     }
 
-    // EXCLUDE campaigns that already have a milestone
-    const milestoneIds = await milestoneSetForInfluencer(influencerId, campaignIds);
-    campaignIds = campaignIds.filter(id => !milestoneIds.has(id));
-    if (!campaignIds.length) {
-      return res.json({ meta: { total: 0, page: +page, limit: +limit, totalPages: 0 }, campaigns: [] });
+    // 3) Exclude campaigns that already have a milestone
+    const milestoneIds = await milestoneSetForInfluencer(influencerId, filteredIds);
+    const remainingIds = filteredIds.filter(id => !milestoneIds.has(id));
+    if (!remainingIds.length) {
+      return res.json({
+        meta: { total: 0, page: +page, limit: +limit, totalPages: 0 },
+        campaigns: []
+      });
     }
 
-    // Maps for annotation
-    const contractIdMap = new Map();
-    const feeMap = new Map();
+    // 4) Map contract details for annotations
+    const contractMap = new Map();
     contracts.forEach(c => {
-      const cid = toStr(c.campaignId);
-      if (campaignIds.includes(cid)) {
-        contractIdMap.set(cid, c.contractId);
-        feeMap.set(cid, c.feeAmount);
+      const cid = c.campaignId.toString();
+      if (remainingIds.includes(cid)) {
+        contractMap.set(cid, { contractId: c.contractId, feeAmount: c.feeAmount });
       }
     });
 
-    // Search filter
-    const filter = { campaignsId: { $in: campaignIds } };
+    // 5) Build campaign filter with optional search
+    const filter = { campaignsId: { $in: remainingIds } };
     if (search?.trim()) {
       const term = search.trim();
       const or = [
@@ -1311,12 +1328,12 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
       filter.$or = or;
     }
 
-    // Pagination
+    // 6) Query campaigns with pagination
     const pageNum = Math.max(1, parseInt(page, 10));
     const limNum = Math.max(1, parseInt(limit, 10));
     const skip = (pageNum - 1) * limNum;
 
-    const [total, raw] = await Promise.all([
+    const [total, rawCampaigns] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
         .sort({ createdAt: -1 })
@@ -1326,18 +1343,27 @@ exports.getContractedCampaignsByInfluencer = async (req, res) => {
         .lean()
     ]);
 
-    const campaigns = raw.map(c => ({
-      ...c,
-      hasApplied: 1,
-      isContracted: 1,
-      isAccepted: 0,
-      hasMilestone: 0,
-      contractId: contractIdMap.get(c.campaignsId) || null,
-      feeAmount: feeMap.get(c.campaignsId) || 0
-    }));
+    // 7) Annotate and respond
+    const campaigns = rawCampaigns.map(c => {
+      const details = contractMap.get(c.campaignsId);
+      return {
+        ...c,
+        hasApplied: 1,
+        isContracted: 1,
+        isAccepted: 0,
+        hasMilestone: 0,
+        contractId: details?.contractId || null,
+        feeAmount: details?.feeAmount || 0
+      };
+    });
 
     return res.json({
-      meta: { total, page: pageNum, limit: limNum, totalPages: Math.ceil(total / limNum) },
+      meta: {
+        total,
+        page: pageNum,
+        limit: limNum,
+        totalPages: Math.ceil(total / limNum)
+      },
       campaigns
     });
   } catch (err) {

@@ -86,6 +86,7 @@ exports.getMilestonesByCampaign = async (req, res) => {
         .map(e => ({
           ...e,
           brandId: doc.brandId,
+          milestoneId: doc.milestoneId,
           walletBalance: doc.walletBalance
         }))
     );
@@ -120,6 +121,7 @@ exports.getMilestonesByInfluencerAndCampaign = async (req, res) => {
         .map(e => ({
           ...e,
           brandId: doc.brandId,
+          milestoneId: doc.milestoneId,
           walletBalance: doc.walletBalance
         }))
     );
@@ -151,6 +153,7 @@ exports.getMilestonesByInfluencer = async (req, res) => {
         .map(e => ({
           ...e,
           brandId: doc.brandId,
+          milestoneId: doc.milestoneId,
           walletBalance: doc.walletBalance
         }))
     );
@@ -185,6 +188,7 @@ exports.getMilestonesByBrand = async (req, res) => {
     const entries = doc.milestoneHistory.map(e => ({
       ...e,
       brandId: doc.brandId,
+      milestoneId: doc.milestoneId,
       walletBalance: doc.walletBalance
     }));
 

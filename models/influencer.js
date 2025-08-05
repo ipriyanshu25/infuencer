@@ -19,11 +19,16 @@ const paymentSchema = new mongoose.Schema({
     swift: { type: String },
     bankName: { type: String, required: function () { return this.type === 1; } },
     branch: { type: String },
-    country: { type: String }
+    countryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Country',
+      required: function () { return this.type === 1; }
+    },
+    countryName: { type: String, required: function () { return this.type === 1; } }
   },
   paypal: {
     email: { type: String, match: [emailRegex, 'Invalid PayPal email'], required: function () { return this.type === 0; } },
-    paypalId: { type: String }
+    username: { type: String }
   },
   isDefault: { type: Boolean, default: false }
 }, { _id: false, timestamps: true });

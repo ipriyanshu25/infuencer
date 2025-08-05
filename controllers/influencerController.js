@@ -491,22 +491,23 @@ exports.resetPasswordInfluencer = async (req, res) => {
   }
 };
 
+
+
+
 exports.addPaymentMethod = async (req, res) => {
   try {
     const { influencerId } = req.influencer || {};
-    const {
-      type,
-      bank = {},
-      paypal = {},
-      isDefault = false
-    } = req.body;
+    const { type, bank = {}, paypal = {}, isDefault = false } = req.body;
 
+    // validate type
     if (![0, 1].includes(Number(type))) {
       return res.status(400).json({ message: 'type must be 0 (PayPal) or 1 (Bank)' });
     }
 
     const inf = await Influencer.findOne({ influencerId });
-    if (!inf) return res.status(404).json({ message: 'Influencer not found' });
+    if (!inf) {
+      return res.status(404).json({ message: 'Influencer not found' });
+    }
 
     const paymentObj = {
       paymentId: uuidv4(),
@@ -517,12 +518,20 @@ exports.addPaymentMethod = async (req, res) => {
     };
 
     if (Number(type) === 1) {
-      const required = ['accountHolder', 'accountNumber', 'bankName'];
+      // 2) require new bank.countryId
+      const required = ['accountHolder', 'accountNumber', 'bankName', 'countryId'];
       for (const f of required) {
-        if (!bank[f]?.trim()) {
+        if (!bank[f] || !bank[f].toString().trim()) {
           return res.status(400).json({ message: `Missing bank field: ${f}` });
         }
       }
+
+      // 3) fetch country to get its name
+      const countryDoc = await Country.findById(bank.countryId);
+      if (!countryDoc) {
+        return res.status(400).json({ message: 'Invalid bank.countryId' });
+      }
+
       paymentObj.bank = {
         accountHolder: bank.accountHolder.trim(),
         accountNumber: bank.accountNumber.trim(),
@@ -530,22 +539,27 @@ exports.addPaymentMethod = async (req, res) => {
         swift: bank.swift?.trim(),
         bankName: bank.bankName.trim(),
         branch: bank.branch?.trim(),
-        country: bank.country?.trim()
+        countryId: countryDoc._id,              // store the ObjectId
+        countryName: countryDoc.name            // store the fetched name
       };
+
     } else {
-      if (!paypal.email?.trim()) {
+      // PayPal
+      if (!paypal.email || !paypal.email.trim()) {
         return res.status(400).json({ message: 'paypal.email is required' });
       }
       paymentObj.paypal = {
         email: paypal.email.trim(),
-        paypalId: paypal.paypalId?.trim()
+        username: paypal.username?.trim()
       };
     }
 
+    // ensure only one default
     if (paymentObj.isDefault) {
       inf.paymentMethods.forEach(pm => (pm.isDefault = false));
-    } else {
-      if (inf.paymentMethods.length === 0) paymentObj.isDefault = true;
+    } else if (inf.paymentMethods.length === 0) {
+      // first method becomes default
+      paymentObj.isDefault = true;
     }
 
     inf.paymentMethods.push(paymentObj);
@@ -556,11 +570,17 @@ exports.addPaymentMethod = async (req, res) => {
       paymentId: paymentObj.paymentId,
       paymentMethods: inf.paymentMethods
     });
+
   } catch (err) {
     console.error('Error in addPaymentMethod:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+
+
+
 
 exports.deletePaymentMethod = async (req, res) => {
   try {
@@ -588,6 +608,10 @@ exports.deletePaymentMethod = async (req, res) => {
   }
 };
 
+
+
+
+
 const mask = (val = '', keep = 4) =>
   val.length <= keep ? val : '*'.repeat(val.length - keep) + val.slice(-keep);
 
@@ -596,13 +620,13 @@ exports.viewPaymentByType = async (req, res) => {
     const requester = req.influencer;
     const { influencerId, type } = req.body || {};
 
+    // validate inputs
     if (!influencerId) {
       return res.status(400).json({ message: 'influencerId is required' });
     }
     if (type === undefined || ![0, 1].includes(Number(type))) {
       return res.status(400).json({ message: 'type must be 0 (PayPal) or 1 (Bank)' });
     }
-
     if (!requester || requester.influencerId !== influencerId) {
       return res.status(403).json({ message: 'Forbidden' });
     }
@@ -611,16 +635,20 @@ exports.viewPaymentByType = async (req, res) => {
       { influencerId },
       'paymentMethods influencerId'
     );
-    if (!inf) return res.status(404).json({ message: 'Influencer not found' });
+    if (!inf) {
+      return res.status(404).json({ message: 'Influencer not found' });
+    }
 
-    let filtered = inf.paymentMethods.filter(pm => pm.type === Number(type));
+    let methods = inf.paymentMethods.filter(pm => pm.type === Number(type));
 
     if (Number(type) === 1) {
-      filtered = filtered.map(pm => {
+      // mask account numbers
+      methods = methods.map(pm => {
         const obj = pm.toObject();
         if (obj.bank?.accountNumber) {
           obj.bank.accountNumber = mask(obj.bank.accountNumber);
         }
+        // countryName is safe to return
         return obj;
       });
     }
@@ -628,13 +656,18 @@ exports.viewPaymentByType = async (req, res) => {
     return res.status(200).json({
       influencerId: inf.influencerId,
       type: Number(type),
-      paymentMethods: filtered
+      paymentMethods: methods
     });
+
   } catch (err) {
     console.error('Error in viewPaymentByType:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+
+
 
 exports.updatePaymentMethod = async (req, res) => {
   try {
@@ -647,6 +680,7 @@ exports.updatePaymentMethod = async (req, res) => {
       isDefault
     } = req.body || {};
 
+    // validate
     if (!paymentId) {
       return res.status(400).json({ message: 'paymentId is required' });
     }
@@ -655,49 +689,73 @@ exports.updatePaymentMethod = async (req, res) => {
     }
 
     const inf = await Influencer.findOne({ influencerId });
-    if (!inf) return res.status(404).json({ message: 'Influencer not found' });
+    if (!inf) {
+      return res.status(404).json({ message: 'Influencer not found' });
+    }
 
-    const pm = inf.paymentMethods.find(p => p.paymentId === paymentId);
-    if (!pm) return res.status(404).json({ message: 'Payment method not found' });
+    const pm = inf.paymentMethods.id(paymentId) || inf.paymentMethods.find(p => p.paymentId === paymentId);
+    if (!pm) {
+      return res.status(404).json({ message: 'Payment method not found' });
+    }
 
+    // set new type
     pm.type = Number(type);
 
     if (pm.type === 1) {
-      const required = ['accountHolder', 'accountNumber', 'bankName'];
+      // bank update: require core fields + countryId
+      const required = ['accountHolder', 'accountNumber', 'bankName', 'countryId'];
       for (const f of required) {
-        const val = bank[f] !== undefined ? bank[f] : pm.bank?.[f];
+        const val = bank[f] ?? pm.bank?.[f];
         if (!val || !String(val).trim()) {
           return res.status(400).json({ message: `Missing bank field: ${f}` });
         }
       }
+
+      // fetch country if changed or use existing
+      let countryDoc;
+      if (bank.countryId && bank.countryId !== String(pm.bank?.countryId)) {
+        countryDoc = await Country.findById(bank.countryId);
+        if (!countryDoc) {
+          return res.status(400).json({ message: 'Invalid bank.countryId' });
+        }
+      } else {
+        countryDoc = await Country.findById(pm.bank.countryId);
+      }
+
       pm.bank = {
-        accountHolder: bank.accountHolder ?? pm.bank?.accountHolder,
-        accountNumber: bank.accountNumber ?? pm.bank?.accountNumber,
-        ifsc: bank.ifsc ?? pm.bank?.ifsc,
-        swift: bank.swift ?? pm.bank?.swift,
-        bankName: bank.bankName ?? pm.bank?.bankName,
-        branch: bank.branch ?? pm.bank?.branch,
-        country: bank.country ?? pm.bank?.country
+        accountHolder: (bank.accountHolder ?? pm.bank.accountHolder).trim(),
+        accountNumber: (bank.accountNumber ?? pm.bank.accountNumber).trim(),
+        ifsc: bank.ifsc?.trim() ?? pm.bank.ifsc,
+        swift: bank.swift?.trim() ?? pm.bank.swift,
+        bankName: (bank.bankName ?? pm.bank.bankName).trim(),
+        branch: bank.branch?.trim() ?? pm.bank.branch,
+        countryId: countryDoc._id,
+        countryName: countryDoc.name
       };
+      // clear PayPal
       pm.paypal = undefined;
+
     } else {
+      // PayPal update
       const emailVal = paypal.email ?? pm.paypal?.email;
       if (!emailVal || !String(emailVal).trim()) {
         return res.status(400).json({ message: 'paypal.email is required' });
       }
       pm.paypal = {
-        email: paypal.email ?? pm.paypal?.email,
-        paypalId: paypal.paypalId ?? pm.paypal?.paypalId
+        email: paypal.email?.trim() ?? pm.paypal.email,
+        username: paypal.username?.trim() ?? pm.paypal.username
       };
       pm.bank = undefined;
     }
 
+    // handle default flag
     if (typeof isDefault === 'boolean') {
       if (isDefault) {
         inf.paymentMethods.forEach(x => (x.isDefault = false));
         pm.isDefault = true;
       } else {
         pm.isDefault = false;
+        // ensure at least one default
         if (!inf.paymentMethods.some(x => x.isDefault)) {
           pm.isDefault = true;
         }
@@ -711,11 +769,17 @@ exports.updatePaymentMethod = async (req, res) => {
       paymentMethod: pm,
       paymentMethods: inf.paymentMethods
     });
+
   } catch (err) {
     console.error('Error in updatePaymentMethod:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+
+
+
 
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
@@ -757,6 +821,11 @@ exports.searchInfluencers = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+
+
+
 exports.searchBrands = async (req, res) => {
   try {
     const requester = req.influencer;

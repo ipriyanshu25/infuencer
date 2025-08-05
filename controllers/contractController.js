@@ -275,20 +275,28 @@ exports.viewContractPdf = async (req, res) => {
 exports.acceptContract = async (req, res) => {
   try {
     const { contractId } = req.body;
-    if (!contractId) return res.status(400).json({ message: 'contractId is required' });
+    if (!contractId) {
+      return res.status(400).json({ message: 'contractId is required' });
+    }
 
-    const contract = await Contract.findOneAndUpdate(
-      { contractId },
-      {
-        $set: { isAccepted: 1, isRejected: 0 },
-        $unset: { rejectedReason: '', rejectedAt: '' }
-      },
-      { new: true }
-    );
+    // 1) Load the contract
+    const contract = await Contract.findOne({ contractId });
+    if (!contract) {
+      return res.status(404).json({ message: 'Contract not found' });
+    }
 
-    if (!contract) return res.status(404).json({ message: 'Contract not found' });
+    // 2) Apply acceptance
+    contract.isAccepted = 1;
+    contract.isRejected = 0;
+    contract.rejectedReason = '';
+    contract.rejectedAt = undefined;
 
-    return res.status(200).json({ message: 'Contract approved successfully', contract });
+    // 3) Save
+    await contract.save();
+
+    return res
+      .status(200)
+      .json({ message: 'Contract approved successfully', contract });
   } catch (err) {
     console.error('Error approving contract:', err);
     return res.status(500).json({ error: err.message });

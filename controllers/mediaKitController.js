@@ -37,21 +37,25 @@ function checkDuplicateIds(arr, keyName, errMsg) {
 ────────────────────────────────────────────────────────────── */
 exports.getInfluencerDetails = catchAsync(async (req, res) => {
   const { influencerId } = req.body;
-  if (!influencerId)
+  if (!influencerId) {
     return res.status(400).json({ message: 'influencerId is required' });
+  }
 
-  /* 1) fetch influencer (hide sensitive) */
+  /* 1️⃣  Find influencer (mask subscription & paymentMethods) */
   const influencer = await Influencer.findOne(
     { influencerId },
     { subscription: 0, paymentMethods: 0 }
   ).lean();
 
-  if (!influencer)
+  if (!influencer) {
     return res.status(404).json({ message: 'Influencer not found' });
+  }
 
-  /* 2) seed empty MediaKit on first call */
-  if (!(await MediaKit.exists({ influencerId }))) {
-    await MediaKit.create({
+  /* 2️⃣  Fetch or seed the MediaKit */
+  let kit = await MediaKit.findOne({ influencerId }).lean();
+
+  if (!kit) {
+    kit = await MediaKit.create({
       influencerId,
       name               : influencer.name            || '',
       profileImage       : influencer.profileImage    || '',
@@ -59,12 +63,16 @@ exports.getInfluencerDetails = catchAsync(async (req, res) => {
       platformName       : influencer.platformName    || '',
       categories         : influencer.categoryName    || [],
       audienceBifurcation: influencer.audienceBifurcation || {
-        malePercentage: 0,
-        femalePercentage: 0,
-      },
+        malePercentage   : 0,
+        femalePercentage : 0
+      }
+      /* all other MediaKit fields start empty */
     });
+    kit = kit.toObject();         // convert to plain object for consistency
   }
-  res.json(influencer);
+
+  /* 3️⃣  Return the MediaKit (contains latest stored data) */
+  res.json(kit);
 });
 
 /* ────────────────────────────────────────────────────────────

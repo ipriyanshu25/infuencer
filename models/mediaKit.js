@@ -1,40 +1,68 @@
 const mongoose = require('mongoose');
 
-const countrySchema = new mongoose.Schema(
-  { label: String, percentage: Number },
+/* ────────────────────────────────
+   Embedded → topCountries
+   – ONLY countryId, name, percentage
+────────────────────────────────── */
+const topCountrySchema = new mongoose.Schema(
+  {
+    countryId  : { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true },
+    name       : { type: String, required: true },          // e.g. “United States”
+    percentage : { type: Number, required: true, min: 0, max: 100 },
+  },
   { _id: false }
 );
 
-const ageSchema = new mongoose.Schema(
-  { label: String, percentage: Number },
+/* ────────────────────────────────
+   Embedded → ageBreakdown
+   – now carries audienceRangeId too
+────────────────────────────────── */
+const ageBreakdownSchema = new mongoose.Schema(
+  {
+    audienceRangeId : { type: mongoose.Schema.Types.ObjectId, ref: 'Audience', required: true },
+    range           : { type: String, required: true },     // e.g. “25-34”
+    percentage      : { type: Number, required: true, min: 0, max: 100 },
+  },
   { _id: false }
 );
 
 const mediaKitSchema = new mongoose.Schema(
   {
-    influencerId: { type: String, required: true, unique: true },
-    name: { type: String, required: true },
-    profileImage: String,
-    bio: String,
-    followers: Number,
-    engagementRate: Number,
+    /* primary keys */
+    influencerId   : { type: String, required: true, unique: true },
 
-    platformName: String,
-    categories: [String],
+    /* headline info */
+    name           : { type: String, required: true },
+    profileImage   : String,
+    bio            : String,
+    followers      : Number,
+    engagementRate : Number,
 
+    /* taxonomy */
+    platformName : String,
+    categories   : [String],
+
+    /* gender split */
     audienceBifurcation: {
-      malePercentage: { type: Number, min: 0, max: 100 },
-      femalePercentage: { type: Number, min: 0, max: 100 },
+      malePercentage   : { type: Number, min: 0, max: 100 },
+      femalePercentage : { type: Number, min: 0, max: 100 },
     },
 
-    topCountries: [countrySchema],
-    ageBreakdown: [ageSchema],
-    interests: [String],
-    gallery: [String],
+    /* revised embedded arrays */
+    topCountries : [topCountrySchema],
+    ageBreakdown : [ageBreakdownSchema],
 
-    mediaKitPdf: String,
-    email: String,
-    website: String,
+    interests : [String],
+    gallery   : [String],
+
+    /* collateral */
+    mediaKitPdf : String,
+    email       : String,
+    website     : String,
+
+    /* manual columns */
+    notes    : { type: String, default: '' },
+    rateCard : { type: String },               // URL or file-id
   },
   { timestamps: true }
 );

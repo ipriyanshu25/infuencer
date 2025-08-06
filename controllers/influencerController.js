@@ -233,7 +233,7 @@ exports.registerInfluencer = async (req, res) => {
     inf.audienceRange = countRangeDoc.range;
 
     inf.countryId = countryId;
-    inf.county = countryDoc.countryName;
+    inf.country = countryDoc.countryName;
     inf.callingId = callingId;
     inf.callingcode = callingDoc.callingCode;
 

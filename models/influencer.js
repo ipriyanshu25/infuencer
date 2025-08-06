@@ -104,7 +104,7 @@ const influencerSchema = new mongoose.Schema({
   audienceId: { type: mongoose.Schema.Types.ObjectId, ref: 'AudienceRange', required: function () { return this.otpVerified; } },
   audienceRange: { type: String, required: function () { return this.otpVerified; } },
   countryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: function () { return this.otpVerified; } },
-  county: { type: String, required: function () { return this.otpVerified; } },
+  country: { type: String, required: function () { return this.otpVerified; } },
   callingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: function () { return this.otpVerified; } },
   callingcode: { type: String, required: function () { return this.otpVerified; } },
   bio: { type: String, default: '' },

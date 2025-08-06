@@ -1,21 +1,44 @@
+/* ────────────────────────────────────────────────────────────
+   models
+────────────────────────────────────────────────────────────── */
 const MediaKit   = require('../models/mediaKit');
 const Influencer = require('../models/influencer');
 const Country    = require('../models/country');
-const Audience = require('../models/audienceRange');
+const Audience   = require('../models/audienceRange');
 
-/* helper to avoid repeating try/catch */
+/* ────────────────────────────────────────────────────────────
+   util: async error wrapper
+────────────────────────────────────────────────────────────── */
 const catchAsync = fn => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 
-/* ──────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────
+   util: duplicate-ID detector
+────────────────────────────────────────────────────────────── */
+function checkDuplicateIds(arr, keyName, errMsg) {
+  if (!Array.isArray(arr)) return;              // nothing to check
+  const seen = new Set();
+  for (const item of arr) {
+    const id = item?.[keyName];
+    if (id == null) continue;                   // allow empty objects
+    if (seen.has(id)) {
+      const error = new Error(errMsg);
+      error.statusCode = 400;
+      throw error;
+    }
+    seen.add(id);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────
    POST /api/media-kit/influencer
-   BODY: { influencerId }
-──────────────────────────────────────────────────────────────── */
+────────────────────────────────────────────────────────────── */
 exports.getInfluencerDetails = catchAsync(async (req, res) => {
   const { influencerId } = req.body;
   if (!influencerId)
     return res.status(400).json({ message: 'influencerId is required' });
 
+  /* 1) fetch influencer (hide sensitive) */
   const influencer = await Influencer.findOne(
     { influencerId },
     { subscription: 0, paymentMethods: 0 }
@@ -24,21 +47,35 @@ exports.getInfluencerDetails = catchAsync(async (req, res) => {
   if (!influencer)
     return res.status(404).json({ message: 'Influencer not found' });
 
+  /* 2) seed empty MediaKit on first call */
+  if (!(await MediaKit.exists({ influencerId }))) {
+    await MediaKit.create({
+      influencerId,
+      name               : influencer.name            || '',
+      profileImage       : influencer.profileImage    || '',
+      bio                : influencer.bio             || '',
+      platformName       : influencer.platformName    || '',
+      categories         : influencer.categoryName    || [],
+      audienceBifurcation: influencer.audienceBifurcation || {
+        malePercentage: 0,
+        femalePercentage: 0,
+      },
+    });
+  }
   res.json(influencer);
 });
 
-/* ──────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────
    POST /api/media-kit/list
-──────────────────────────────────────────────────────────────── */
+────────────────────────────────────────────────────────────── */
 exports.getAllMediaKits = catchAsync(async (_req, res) => {
   const kits = await MediaKit.find({}).lean();
   res.json(kits);
 });
 
-/* ──────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────
    POST /api/media-kit/get
-   BODY: { influencerId }
-──────────────────────────────────────────────────────────────── */
+────────────────────────────────────────────────────────────── */
 exports.getMediaKitById = catchAsync(async (req, res) => {
   const { influencerId } = req.body;
   if (!influencerId)
@@ -51,81 +88,84 @@ exports.getMediaKitById = catchAsync(async (req, res) => {
   res.json(kit);
 });
 
-/* ──────────────────────────────────────────────────────────────
-   helpers to enrich topCountries / ageBreakdown payloads
-──────────────────────────────────────────────────────────────── */
-async function enrichTopCountries(arr = []) {
+/* ────────────────────────────────────────────────────────────
+   helpers: enrich arrays with missing names / ranges
+────────────────────────────────────────────────────────────── */
+async function enrichTopCountries(list = []) {
+  const items = list.filter(Boolean);
   return Promise.all(
-    arr.map(async item => {
-      if (item.name) return item;          // already complete
+    items.map(async ({ countryId, name, percentage }) => {
+      if (name) return { countryId, name, percentage };
 
-      // fetch country name by ID
-      const doc = await Country.findById(item.countryId).lean();
-      if (!doc)
-        throw new Error(`Country not found for ID ${item.countryId}`);
+      const doc = await Country.findById(countryId).lean();
+      if (!doc) throw new Error(`Country not found for ID: ${countryId}`);
+      return { countryId, name: doc.countryName, percentage };
+    })
+  );
+}
+async function enrichAgeBreakdown(list = []) {
+  const items = list.filter(Boolean);
+  return Promise.all(
+    items.map(async ({ audienceRangeId, range, percentage }) => {
+      if (range) return { audienceRangeId, range, percentage };
 
-      return { ...item, name: doc.countryName };
+      const doc = await Audience.findById(audienceRangeId).lean();
+      if (!doc) throw new Error(`Audience range not found for ID: ${audienceRangeId}`);
+      return { audienceRangeId, range: doc.range, percentage };
     })
   );
 }
 
-async function enrichAgeBreakdown(arr = []) {
-  return Promise.all(
-    arr.map(async item => {
-      if (item.range) return item;         // already complete
-
-      const doc = await Audience.findById(item.audienceRangeId).lean();
-      if (!doc)
-        throw new Error(`Audience range not found for ID ${item.audienceRangeId}`);
-
-      return { ...item, range: doc.range };
-    })
-  );
-}
-
-/* ──────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────
    POST /api/media-kit/create
-   BODY: full payload – must include influencerId
-──────────────────────────────────────────────────────────────── */
+────────────────────────────────────────────────────────────── */
 exports.createMediaKit = catchAsync(async (req, res) => {
-  const { influencerId } = req.body;
+  const { influencerId, topCountries = [], ageBreakdown = [] } = req.body;
   if (!influencerId)
     return res.status(400).json({ message: 'influencerId is required' });
 
+  /* verify influencer */
   const influencer = await Influencer.findOne({ influencerId });
   if (!influencer)
     return res.status(404).json({ message: 'Influencer not found' });
 
+  /* no duplicates allowed */
+  checkDuplicateIds(topCountries, 'countryId',      'Duplicate countryId detected');
+  checkDuplicateIds(ageBreakdown, 'audienceRangeId','Duplicate audienceRangeId detected');
+
+  /* no second kit */
   if (await MediaKit.exists({ influencerId }))
     return res.status(409).json({ message: 'MediaKit already exists' });
 
-  /* fill blanks from Influencer doc */
+  /* enrich + compose */
   const kitData = {
     ...req.body,
+    influencerId,
     name         : req.body.name         ?? influencer.name,
     profileImage : req.body.profileImage ?? influencer.profileImage,
     bio          : req.body.bio          ?? influencer.bio,
     platformName : req.body.platformName ?? influencer.platformName,
+    topCountries : await enrichTopCountries(topCountries),
+    ageBreakdown : await enrichAgeBreakdown(ageBreakdown),
   };
 
-  /* enrich embedded arrays (adds country name / range label) */
-  kitData.topCountries = await enrichTopCountries(kitData.topCountries);
-  kitData.ageBreakdown = await enrichAgeBreakdown(kitData.ageBreakdown);
-
-  const kit = await MediaKit.create(kitData);   // schema validation
+  const kit = await MediaKit.create(kitData);
   res.status(201).json(kit);
 });
 
-/* ──────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────
    POST /api/media-kit/update
-   BODY: { influencerId, ...fieldsToUpdate }
-──────────────────────────────────────────────────────────────── */
+────────────────────────────────────────────────────────────── */
 exports.updateMediaKit = catchAsync(async (req, res) => {
   const { influencerId, topCountries, ageBreakdown, ...update } = req.body;
   if (!influencerId)
     return res.status(400).json({ message: 'influencerId is required' });
 
-  /* if these arrays are present we need to enrich them first */
+  /* duplicate checks on provided arrays */
+  if (topCountries)   checkDuplicateIds(topCountries, 'countryId',      'Duplicate countryId detected');
+  if (ageBreakdown)   checkDuplicateIds(ageBreakdown,'audienceRangeId', 'Duplicate audienceRangeId detected');
+
+  /* enrich if arrays supplied */
   if (topCountries)  update.topCountries  = await enrichTopCountries(topCountries);
   if (ageBreakdown)  update.ageBreakdown  = await enrichAgeBreakdown(ageBreakdown);
 

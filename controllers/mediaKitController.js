@@ -1,6 +1,8 @@
 /* ────────────────────────────────────────────────────────────
    models
 ────────────────────────────────────────────────────────────── */
+const mongoose = require('mongoose');
+const { v4: uuidv4 } = require('uuid');
 const MediaKit   = require('../models/mediaKit');
 const Influencer = require('../models/influencer');
 const Country    = require('../models/country');
@@ -93,6 +95,7 @@ exports.getMediaKitById = catchAsync(async (req, res) => {
 ────────────────────────────────────────────────────────────── */
 async function enrichTopCountries(list = []) {
   const items = list.filter(Boolean);
+
   return Promise.all(
     items.map(async ({ countryId, name, percentage }) => {
       if (name) return { countryId, name, percentage };
@@ -103,19 +106,45 @@ async function enrichTopCountries(list = []) {
     })
   );
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Helper: enrich each { audienceRangeId, percentage } ➜ +range
+   • audienceRangeId in your payload is the *uuid* field
+──────────────────────────────────────────────────────────────── */
 async function enrichAgeBreakdown(list = []) {
   const items = list.filter(Boolean);
+
   return Promise.all(
     items.map(async ({ audienceRangeId, range, percentage }) => {
-      if (range) return { audienceRangeId, range, percentage };
+      /* Already complete → return as-is */
+      if (range && mongoose.isValidObjectId(audienceRangeId)) {
+        return { audienceRangeId, range, percentage };
+      }
 
-      const doc = await Audience.findById(audienceRangeId).lean();
-      if (!doc) throw new Error(`Audience range not found for ID: ${audienceRangeId}`);
-      return { audienceRangeId, range: doc.range, percentage };
+      let doc = null;
+
+      /* 1️⃣  If it's a valid ObjectId, fetch by _id */
+      if (mongoose.isValidObjectId(audienceRangeId)) {
+        doc = await Audience.findById(audienceRangeId).lean();
+      }
+
+      /* 2️⃣  Otherwise treat it as a UUID stored in audienceId */
+      if (!doc) {
+        doc = await Audience.findOne({ audienceId: audienceRangeId }).lean();
+      }
+
+      if (!doc) {
+        throw new Error(`Audience range not found for ID: ${audienceRangeId}`);
+      }
+
+      return {
+        audienceRangeId: doc._id,   // convert to real ObjectId for schema
+        range          : doc.range,
+        percentage
+      };
     })
   );
 }
-
 /* ────────────────────────────────────────────────────────────
    POST /api/media-kit/create
 ────────────────────────────────────────────────────────────── */
@@ -156,20 +185,36 @@ exports.createMediaKit = catchAsync(async (req, res) => {
 /* ────────────────────────────────────────────────────────────
    POST /api/media-kit/update
 ────────────────────────────────────────────────────────────── */
+
+
 exports.updateMediaKit = catchAsync(async (req, res) => {
   const { influencerId, topCountries, ageBreakdown, ...update } = req.body;
-  if (!influencerId)
+
+  if (!influencerId) {
     return res.status(400).json({ message: 'influencerId is required' });
+  }
 
-  /* duplicate checks on provided arrays */
-  if (topCountries)   checkDuplicateIds(topCountries, 'countryId',      'Duplicate countryId detected');
-  if (ageBreakdown)   checkDuplicateIds(ageBreakdown,'audienceRangeId', 'Duplicate audienceRangeId detected');
+  /* duplicate checks */
+  if (topCountries) checkDuplicateIds(topCountries, 'countryId', 'Duplicate countryId detected');
+  if (ageBreakdown) checkDuplicateIds(ageBreakdown, 'audienceRangeId', 'Duplicate audienceRangeId detected');
 
-  /* enrich if arrays supplied */
+  /* enrich arrays if supplied */
   if (topCountries)  update.topCountries  = await enrichTopCountries(topCountries);
   if (ageBreakdown)  update.ageBreakdown  = await enrichAgeBreakdown(ageBreakdown);
 
-  const kit = await MediaKit.findOneAndUpdate(
+  /* ensure default fields on an upsert */
+  let kit = await MediaKit.findOne({ influencerId });
+  if (!kit) {
+    const influencer = await Influencer.findOne({ influencerId });
+    if (!influencer) return res.status(404).json({ message: 'Influencer not found' });
+
+    update.name         ??= influencer.name;
+    update.profileImage ??= influencer.profileImage;
+    update.bio          ??= influencer.bio;
+    update.platformName ??= influencer.platformName;
+  }
+
+  kit = await MediaKit.findOneAndUpdate(
     { influencerId },
     update,
     { new: true, upsert: true, runValidators: true }

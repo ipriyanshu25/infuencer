@@ -16,11 +16,8 @@ exports.createMilestone = async (req, res) => {
   // 0) Coerce and validate amount
   const amountNum = Number(amount);
   if (isNaN(amountNum)) {
-    return res.status(400).json({
-      message: 'amount must be a valid number'
-    });
+    return res.status(400).json({ message: 'amount must be a valid number' });
   }
-
   if (!brandId || !influencerId || !campaignId || !milestoneTitle || amount == null) {
     return res.status(400).json({
       message: 'brandId, influencerId, campaignId, milestoneTitle and amount are required'
@@ -40,13 +37,34 @@ exports.createMilestone = async (req, res) => {
       doc = new Milestone({ brandId });
     }
 
-    // 3) Append a new history entry (using numeric amount)
+    // 2a) Check previous milestone for this influencer+campaign
+    const prev = doc.milestoneHistory
+      .filter(e =>
+        e.influencerId === influencerId &&
+        e.campaignId === campaignId
+      );
+
+    if (prev.length > 0) {
+      // find the very last one for this exact pair
+      prev.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      const last = prev[0];
+
+      if (!last.released) {
+        return res.status(400).json({
+          message: 'Cannot create new milestone until the previous milestone is released'
+        });
+      }
+    }
+
+    // 3) Append a new history entry (with default released=false)
     const entry = {
       influencerId,
       campaignId,
       milestoneTitle,
       amount: amountNum,
-      milestoneDescription
+      milestoneDescription,
+      released: false,          // <-- new flag
+      createdAt: new Date()     // <-- ensure you record a timestamp
     };
     doc.milestoneHistory.push(entry);
 
@@ -91,6 +109,9 @@ exports.getMilestonesByCampaign = async (req, res) => {
         }))
     );
 
+    // Newest-first sort inline
+    entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
     return res.status(200).json({
       message: 'Milestones fetched by campaign',
       milestones: entries
@@ -101,8 +122,10 @@ exports.getMilestonesByCampaign = async (req, res) => {
   }
 };
 
-// POST /milestone/listByInfluencerAndCampaign
-// body: { influencerId, campaignId }
+/**
+ * POST /milestone/listByInfluencerAndCampaign
+ * body: { influencerId, campaignId }
+ */
 exports.getMilestonesByInfluencerAndCampaign = async (req, res) => {
   const { influencerId, campaignId } = req.body;
   if (!influencerId || !campaignId) {
@@ -126,6 +149,9 @@ exports.getMilestonesByInfluencerAndCampaign = async (req, res) => {
         }))
     );
 
+    // Newest-first sort inline
+    entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
     return res.status(200).json({
       message: 'Milestones fetched by influencer and campaign',
       milestones: entries
@@ -136,8 +162,10 @@ exports.getMilestonesByInfluencerAndCampaign = async (req, res) => {
   }
 };
 
-// POST /milestone/listByInfluencer
-// body: { influencerId }
+/**
+ * POST /milestone/listByInfluencer
+ * body: { influencerId }
+ */
 exports.getMilestonesByInfluencer = async (req, res) => {
   const { influencerId } = req.body;
   if (!influencerId) {
@@ -158,6 +186,9 @@ exports.getMilestonesByInfluencer = async (req, res) => {
         }))
     );
 
+    // Newest-first sort inline
+    entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
     return res.status(200).json({
       message: 'Milestones fetched by influencer',
       milestones: entries
@@ -168,8 +199,10 @@ exports.getMilestonesByInfluencer = async (req, res) => {
   }
 };
 
-// POST /milestone/listByBrand
-// body: { brandId }
+/**
+ * POST /milestone/listByBrand
+ * body: { brandId }
+ */
 exports.getMilestonesByBrand = async (req, res) => {
   const { brandId } = req.body;
   if (!brandId) {
@@ -191,6 +224,9 @@ exports.getMilestonesByBrand = async (req, res) => {
       milestoneId: doc.milestoneId,
       walletBalance: doc.walletBalance
     }));
+
+    // Newest-first sort inline
+    entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     return res.status(200).json({
       message: 'Milestones fetched by brand',
@@ -274,11 +310,11 @@ exports.getInfluencerPaidTotal = async (req, res) => {
     let totalPaid = 0;
     docs.forEach(d => {
       d.milestoneHistory
-       .filter(e => e.influencerId === influencerId && e.released)
-       .forEach(e => { totalPaid += e.amount; });
+        .filter(e => e.influencerId === influencerId && e.released)
+        .forEach(e => { totalPaid += e.amount; });
     });
     return res.json({ influencerId, totalPaid });
-  } catch(err) {
+  } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'Internal server error.' });
   }

@@ -100,7 +100,7 @@ exports.getDashboardInf = async (req, res) => {
       isAccepted: 0
     });
 
-    /* 3. Accepted contracts → decide “active” by campaign timeline     */
+    /* 3. Accepted contracts → decide “active” by campaign timeline */
     const acceptedContracts = await Contract.find(
       { influencerId, isAccepted: 1 },
       'campaignId'
@@ -115,7 +115,7 @@ exports.getDashboardInf = async (req, res) => {
       ]
     });
 
-    /* 4. Milestone aggregates (released / upcoming) */
+    /* 4a. Total earnings from all released milestones */
     const [releasedAgg] = await Milestone.aggregate([
       { $unwind: '$milestoneHistory' },
       { $match: {
@@ -125,19 +125,18 @@ exports.getDashboardInf = async (req, res) => {
       { $group: { _id: null, total: { $sum: '$milestoneHistory.amount' } } }
     ]);
 
+    /* 4b. Upcoming payouts = sum of all _unreleased_ milestones */
     const [upcomingAgg] = await Milestone.aggregate([
       { $unwind: '$milestoneHistory' },
       { $match: {
           'milestoneHistory.influencerId': influencerId,
-          'milestoneHistory.released': false,
-          'milestoneHistory.accepted': true,
-          'milestoneHistory.dueDate': { $lte: firstOfNextMonth }
+          'milestoneHistory.released': false
       }},
       { $group: { _id: null, total: { $sum: '$milestoneHistory.amount' } } }
     ]);
 
-    const totalEarnings   = releasedAgg?.total  || 0;
-    const upcomingPayouts = upcomingAgg?.total  || 0;
+    const totalEarnings   = releasedAgg?.total   || 0;
+    const upcomingPayouts = upcomingAgg?.total   || 0;
 
     /* 5. Response */
     return res.status(200).json({

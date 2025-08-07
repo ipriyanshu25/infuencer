@@ -34,10 +34,7 @@ exports.verifyToken = (req, res, next) => {
  */
 exports.getDashboard = async (req, res) => {
   try {
-    const { brandId } = req.user || {};
-    if (!brandId) {
-      return res.status(403).json({ message: 'Forbidden' });
-    }
+    const { brandId } = req.body || {};
 
     // 1) Fetch brand name
     const brand = await Brand.findOne({ brandId });

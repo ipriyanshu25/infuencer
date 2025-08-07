@@ -34,14 +34,9 @@ exports.verifyToken = (req, res, next) => {
  */
 exports.getDashboard = async (req, res) => {
   try {
-    const { brandId } = req.body;
+    const { brandId } = req.user || {};
     if (!brandId) {
-      return res.status(400).json({ error: 'brandId is required in the request body' });
-    }
-
-    // enforce that the token is for this brand
-    if (!req.user?.brandId || req.user.brandId !== brandId) {
-      return res.status(403).json({ error: 'Forbidden' });
+      return res.status(403).json({ message: 'Forbidden' });
     }
 
     // 1) Fetch brand name

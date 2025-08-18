@@ -281,9 +281,49 @@ exports.login = async (req, res) => {
       return res.status(404).json({ message: 'Influencer not found' });
     }
 
+    // ⛔ If locked, block regardless of password correctness
+    const now = new Date();
+    if (influencer.lockUntil && influencer.lockUntil > now) {
+      const msLeft = influencer.lockUntil.getTime() - now.getTime();
+      const minutesLeft = Math.ceil(msLeft / (60 * 1000));
+      return res.status(403).json({
+        message: 'Account locked due to multiple failed login attempts. Try again after the lock period.',
+        lockUntil: influencer.lockUntil,
+        minutesLeft
+      });
+    }
+
     const isMatch = await influencer.comparePassword(password);
     if (!isMatch) {
-      return res.status(400).json({ message: 'Invalid credentials' });
+      // ❌ Wrong password → count & maybe lock
+      influencer.failedLoginAttempts = (influencer.failedLoginAttempts || 0) + 1;
+
+      if (influencer.failedLoginAttempts >= 3) {
+        const LOCK_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
+        influencer.lockUntil = new Date(Date.now() + LOCK_WINDOW_MS);
+      }
+
+      await influencer.save();
+
+      if (influencer.lockUntil && influencer.lockUntil > now) {
+        return res.status(403).json({
+          message: 'Too many failed attempts. Account locked for 24 hours.',
+          lockUntil: influencer.lockUntil
+        });
+      }
+
+      const attemptsLeft = Math.max(0, 3 - influencer.failedLoginAttempts);
+      return res.status(400).json({
+        message: 'Invalid credentials',
+        attemptsLeft
+      });
+    }
+
+    // ✅ Correct password & not locked → reset counters
+    if (influencer.failedLoginAttempts || influencer.lockUntil) {
+      influencer.failedLoginAttempts = 0;
+      influencer.lockUntil = null;
+      await influencer.save();
     }
 
     const token = jwt.sign(
@@ -480,11 +520,19 @@ exports.resetPasswordInfluencer = async (req, res) => {
       return res.status(400).json({ message: 'Password reset not verified' });
     }
 
+    // set new password (will hash via pre-save hook)
     influencer.password = newPassword;
+
+    // 🔄 Clear lock & attempts after successful reset
+    influencer.failedLoginAttempts = 0;
+    influencer.lockUntil = null;
+
+    // finalize reset flow
     influencer.passwordResetVerified = false;
+
     await influencer.save();
 
-    return res.status(200).json({ message: 'Password reset successful' });
+    return res.status(200).json({ message: 'Password reset successful. You can log in now.' });
   } catch (err) {
     console.error('Error in resetPasswordInfluencer:', err);
     return res.status(403).json({ message: 'Invalid or expired reset token' });

@@ -133,7 +133,9 @@ const influencerSchema = new mongoose.Schema({
       default: []
     }
   },
-  subscriptionExpired: { type: Boolean, default: false }
+  subscriptionExpired: { type: Boolean, default: false },
+  failedLoginAttempts: { type: Number, default: 0 },
+  lockUntil: { type: Date, default: null }
 }, { timestamps: true });
 
 // Hooks: ensure paymentIds exist and only one default

@@ -158,18 +158,61 @@ exports.login = async (req, res) => {
     });
     if (!brand) return res.status(404).json({ message: 'Brand not found' });
 
-    // 2) Compare provided password with hashed password
-    const isMatch = await brand.comparePassword(password);
-    if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
+    // 2) If account is locked, block login
+    const now = new Date();
+    if (brand.lockUntil && brand.lockUntil > now) {
+      const msLeft = brand.lockUntil.getTime() - now.getTime();
+      const minutesLeft = Math.ceil(msLeft / (60 * 1000));
+      return res.status(403).json({
+        message: 'Account locked due to multiple failed login attempts. Try again after the lock period.',
+        lockUntil: brand.lockUntil,
+        minutesLeft
+      });
+    }
 
-    // 3) Generate JWT (expires in 100 days)
+    // 3) Compare provided password with hashed password
+    const isMatch = await brand.comparePassword(password);
+
+    if (!isMatch) {
+      // Wrong password → increment attempts
+      brand.failedLoginAttempts = (brand.failedLoginAttempts || 0) + 1;
+
+      if (brand.failedLoginAttempts >= 3) {
+        // Lock for 24 hours from *this* incorrect attempt
+        const LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
+        brand.lockUntil = new Date(Date.now() + LOCK_WINDOW_MS);
+      }
+
+      await brand.save();
+
+      if (brand.lockUntil && brand.lockUntil > now) {
+        return res.status(403).json({
+          message: 'Too many failed attempts. Account locked for 24 hours.',
+          lockUntil: brand.lockUntil
+        });
+      }
+
+      const attemptsLeft = Math.max(0, 3 - brand.failedLoginAttempts);
+      return res.status(400).json({
+        message: 'Invalid credentials',
+        attemptsLeft
+      });
+    }
+
+    // 4) Correct password & not locked → reset counters
+    if (brand.failedLoginAttempts || brand.lockUntil) {
+      brand.failedLoginAttempts = 0;
+      brand.lockUntil = null;
+      await brand.save();
+    }
+
+    // 5) Generate JWT (expires in 100 days)
     const token = jwt.sign(
       { brandId: brand.brandId, email: brand.email },
       JWT_SECRET,
       { expiresIn: '100d' }
     );
 
-    // 4) Return token
     return res.status(200).json({
       message: 'Login successful',
       brandId: brand.brandId,

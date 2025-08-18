@@ -51,7 +51,9 @@ const brandSchema = new mongoose.Schema({
 
   // subscription sub-doc…
   subscription: { type: subscriptionSchema, default: () => ({}) },
-  subscriptionExpired: { type: Boolean, default: false }
+  subscriptionExpired: { type: Boolean, default: false },
+  failedLoginAttempts: { type: Number, default: 0 },
+  lockUntil: { type: Date, default: null }
 }, { timestamps: true });
 
 // Hash password before saving

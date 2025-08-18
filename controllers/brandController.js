@@ -388,16 +388,23 @@ exports.resetPassword = async (req, res) => {
       return res.status(404).json({ message: 'Brand not found' });
     }
 
-    // optional: ensure passwordResetVerified was true (defense in depth)
     if (!brand.passwordResetVerified) {
       return res.status(400).json({ message: 'Password reset not verified' });
     }
 
-    brand.password = newPassword; // will hash via pre-save hook
-    brand.passwordResetVerified = false; // clear flag
+    // set new password (pre-save hook will hash)
+    brand.password = newPassword;
+
+    // ✅ CLEAR lock & attempts so user can log in immediately
+    brand.failedLoginAttempts = 0;
+    brand.lockUntil = null;
+
+    // clear the flag so reset flow can't be reused
+    brand.passwordResetVerified = false;
+
     await brand.save();
 
-    return res.status(200).json({ message: 'Password reset successful' });
+    return res.status(200).json({ message: 'Password reset successful. You can log in now.' });
   } catch (err) {
     console.error('Error in resetPassword:', err);
     return res.status(403).json({ message: 'Invalid or expired reset token' });

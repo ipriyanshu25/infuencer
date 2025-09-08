@@ -111,7 +111,7 @@ exports.register = async (req, res) => {
   brand.name        = name;
   brand.password    = password;
   brand.phone       = phone;
-  brand.county      = countryDoc.countryName;
+  brand.counrty      = countryDoc.countryName;
   brand.callingcode = callingDoc.callingCode;
   brand.countryId   = countryId;
   brand.callingId   = callingId;

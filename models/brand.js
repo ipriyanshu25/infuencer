@@ -31,7 +31,7 @@ const brandSchema = new mongoose.Schema({
     required: function () { return this.otpVerified; }
   },
   phone: { type: String, match: [phoneRegex, 'Invalid phone'], required: function () { return this.otpVerified; } },
-  county: { type: String, required: function () { return this.otpVerified; } },
+  country: { type: String, required: function () { return this.otpVerified; } },
   callingcode: { type: String, required: function () { return this.otpVerified; } },
   countryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: function () { return this.otpVerified; } },
   callingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: function () { return this.otpVerified; } },

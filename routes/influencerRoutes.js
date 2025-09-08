@@ -17,7 +17,8 @@ resetPasswordInfluencer,
 viewPaymentByType,
 addPaymentMethod,
 deletePaymentMethod,
-updatePaymentMethod
+updatePaymentMethod,
+suggestInfluencers
 } = require('../controllers/influencerController');
 
 
@@ -41,6 +42,7 @@ router.post('/viewPaymentByType', verifyToken, viewPaymentByType);
 router.post('/addPaymentMethod', verifyToken, addPaymentMethod);
 router.post('/deletePaymentMethod', verifyToken, deletePaymentMethod);
 router.post('/updatePaymentMethod', verifyToken, updatePaymentMethod);
+router.post('/suggestInfluencers', verifyToken, suggestInfluencers);
 
 // POST /influencer/searchBrands → search brands by name
 router.post(    

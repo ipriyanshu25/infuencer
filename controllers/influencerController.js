@@ -1,3 +1,5 @@
+// controllers/influencerController.js
+
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
@@ -5,7 +7,7 @@ const multer = require('multer');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
-
+const Brand = require('../models/brand');
 const Influencer = require('../models/influencer');
 const Interest = require('../models/interest');
 const AudienceRange = require('../models/audience');
@@ -14,6 +16,7 @@ const subscriptionHelper = require('../utils/subscriptionHelper');
 const Platform = require('../models/platform');
 const Audience = require('../models/audienceRange');
 const Campaign = require('../models/campaign');
+const { escapeRegExp } = require('../utils/searchTokens');
 
 const SMTP_HOST = process.env.SMTP_HOST;
 const SMTP_PORT = parseInt(process.env.SMTP_PORT, 10);
@@ -835,12 +838,8 @@ exports.searchInfluencers = async (req, res) => {
     const requester = req.brand;
     const { search, brandId } = req.body || {};
 
-    if (!brandId) {
-      return res.status(400).json({ message: 'brandId is required' });
-    }
-    if (!requester || requester.brandId !== brandId) {
-      return res.status(403).json({ message: 'Forbidden' });
-    }
+    if (!brandId) return res.status(400).json({ message: 'brandId is required' });
+    if (!requester || requester.brandId !== brandId) return res.status(403).json({ message: 'Forbidden' });
 
     if (!search || !String(search).trim()) {
       return res.status(400).json({ message: 'search is required' });
@@ -848,9 +847,11 @@ exports.searchInfluencers = async (req, res) => {
 
     await delay(300);
 
-    const regex = new RegExp(search.trim(), 'i');
+    const q = search.trim().toLowerCase();
+    const rx = new RegExp('^' + escapeRegExp(q));
+
     const docs = await Influencer
-      .find({ name: regex }, 'name influencerId')
+      .find({ _ac: { $regex: rx } }, 'name influencerId')
       .limit(10)
       .lean();
 
@@ -858,17 +859,13 @@ exports.searchInfluencers = async (req, res) => {
       return res.status(404).json({ message: 'No influencers found' });
     }
 
-    const results = docs.map(d => ({
-      name: d.name,
-      influencerId: d.influencerId
-    }));
+    const results = docs.map(d => ({ name: d.name, influencerId: d.influencerId }));
     return res.json({ results });
   } catch (err) {
     console.error('Error in searchInfluencers:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
-
 
 
 
@@ -905,5 +902,40 @@ exports.searchBrands = async (req, res) => {
   } catch (err) {
     console.error('Error in searchBrands:', err);
     return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+exports.suggestInfluencers = async (req, res) => {
+  try {
+    const { q: rawQ = '', limit: rawLimit = 8 } = req.body || {};
+    const q = String(rawQ).trim().toLowerCase();
+    const limit = Math.max(1, Math.min(20, parseInt(rawLimit, 10) || 8));
+    if (!q) return res.json({ success: true, suggestions: [] });
+
+    const rx = new RegExp('^' + escapeRegExp(q));
+    const candidates = await Influencer.find(
+      { _ac: { $regex: rx } },
+      { name: 1, categoryName: 1, platformName: 1, country: 1, socialMedia: 1 }
+    ).limit(100).lean();
+
+    const set = new Set();
+    for (const c of candidates) {
+      if (c.name) set.add(c.name);
+      if (Array.isArray(c.categoryName)) c.categoryName.forEach(v => v && set.add(v));
+      if (c.platformName) set.add(c.platformName);
+      if (c.country) set.add(c.country);
+      if (c.socialMedia) set.add(c.socialMedia);
+    }
+
+    const list = Array.from(set);
+    const starts = list.filter(s => s.toLowerCase().startsWith(q));
+    const contains = list.filter(s => !s.toLowerCase().startsWith(q) && s.toLowerCase().includes(q));
+    const ordered = [...starts, ...contains].slice(0, limit);
+
+    res.json({ success: true, suggestions: ordered });
+  } catch (err) {
+    console.error('Suggestion error:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };

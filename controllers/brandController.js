@@ -6,7 +6,7 @@ const nodemailer = require('nodemailer');
 const Brand = require('../models/brand');
 const VerifyEmail = require('../models/verifyEmail');
 const Country = require('../models/country');
-const Milestone = require('../models/milestone');
+const Milestone = require('../models/milestone'); 
 const Subscription = require('../models/subscription'); // if used in subscriptionHelper
 const subscriptionHelper = require('../utils/subscriptionHelper');
 

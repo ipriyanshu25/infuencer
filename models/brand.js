@@ -23,33 +23,25 @@ const subscriptionSchema = new mongoose.Schema({
 const brandSchema = new mongoose.Schema({
   brandId: { type: String, required: true, unique: true, default: uuidv4 },
 
-  // only required once otpVerified === true
-  name: { type: String, required: function () { return this.otpVerified; } },
-  password: {
-    type: String,
-    minlength: 8,
-    required: function () { return this.otpVerified; }
-  },
-  phone: { type: String, match: [phoneRegex, 'Invalid phone'], required: function () { return this.otpVerified; } },
-  country: { type: String, required: function () { return this.otpVerified; } },
-  callingcode: { type: String, required: function () { return this.otpVerified; } },
-  countryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: function () { return this.otpVerified; } },
-  callingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: function () { return this.otpVerified; } },
+  // Only created AFTER email verification -> required here
+  name: { type: String, required: true },
+  password: { type: String, minlength: 8, required: true },
+  phone: { type: String, match: [phoneRegex, 'Invalid phone'], required: true },
+  county: { type: String, required: true },
+  callingcode: { type: String, required: true },
+  countryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true },
+  callingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true },
 
   // always required
   email: { type: String, required: true, unique: true, match: [emailRegex, 'Invalid email'] },
   createdAt: { type: Date, default: Date.now },
 
-  // OTP fields — used before full registration
-  otpCode: { type: String },
-  otpExpiresAt: { type: Date },
-  otpVerified: { type: Boolean, default: false },
-  
+  // password reset fields
   passwordResetCode: { type: String },
   passwordResetExpiresAt: { type: Date },
   passwordResetVerified: { type: Boolean, default: false },
 
-  // subscription sub-doc…
+  // subscription sub-doc
   subscription: { type: subscriptionSchema, default: () => ({}) },
   subscriptionExpired: { type: Boolean, default: false },
   failedLoginAttempts: { type: Number, default: 0 },

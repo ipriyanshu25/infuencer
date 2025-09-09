@@ -1,12 +1,14 @@
+// controllers/brandController.js
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
+
 const Brand = require('../models/brand');
+const VerifyEmail = require('../models/verifyEmail');
 const Country = require('../models/country');
 const Milestone = require('../models/milestone');
-const Subscription = require('../models/subscription'); // <-- your plan model
+const Subscription = require('../models/subscription'); // if used in subscriptionHelper
 const subscriptionHelper = require('../utils/subscriptionHelper');
-
 
 const SMTP_HOST = process.env.SMTP_HOST;
 const SMTP_PORT = parseInt(process.env.SMTP_PORT, 10);
@@ -21,128 +23,155 @@ const transporter = nodemailer.createTransport({
   auth: { user: SMTP_USER, pass: SMTP_PASS }
 });
 
-// 1) Request OTP
+const exactEmailRegex = (email) => ({
+  $regex: `^${String(email || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+  $options: 'i'
+});
+const emailRegex = /^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}$/;
+
+
 exports.requestOtp = async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ message: 'Email is required' });
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: 'Email is required' });
 
-  // generate code & expiry
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    // Generate code & expiry
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-  // upsert brand record’s OTP fields
-  const brand = await Brand.findOneAndUpdate(
-    { email },
-    { otpCode: code, otpExpiresAt: expiresAt, otpVerified: false },
-    { new: true }
-  );
-  if (!brand) {
-    // if no brand yet, create a temp record with email only
-    await new Brand({ email, otpCode: code, otpExpiresAt: expiresAt }).save();
+    // Upsert verification record (do NOT create a Brand yet)
+    await VerifyEmail.findOneAndUpdate(
+      { email: exactEmailRegex(email) },
+      {
+        $set: { email: email.trim(), otpCode: code, otpExpiresAt: expiresAt, verified: false, verifiedAt: null },
+        $inc: { attempts: 1 }
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    // Send OTP email
+    await transporter.sendMail({
+      from: `"No-Reply" <${SMTP_USER}>`,
+      to: email,
+      subject: 'Your verification code',
+      text: `Your OTP is ${code}. It expires in 10 minutes.`
+    });
+
+    return res.json({ message: 'OTP sent to email' });
+  } catch (err) {
+    console.error('Error in requestOtp:', err);
+    return res.status(500).json({ message: 'Internal server error' });
   }
-
-  // send OTP email
-  await transporter.sendMail({
-    from: `"No-Reply" <${SMTP_USER}>`,
-    to: email,
-    subject: 'Your verification code',
-    text: `Your OTP is ${code}. It expires in 10 minutes.`
-  });
-
-  res.json({ message: 'OTP sent to email' });
 };
 
-// 2) Verify OTP
+/**
+ * 2) Verify OTP (email verification) — now uses VerifyEmail model
+ * POST /brand/otp/verify
+ * Body: { email, otp }
+ */
 exports.verifyOtp = async (req, res) => {
-  const { email, otp } = req.body;
-  if (!email || otp == null) {
-    return res.status(400).json({ message: 'Email and otp required' });
-  }
+  try {
+    const { email, otp } = req.body;
+    if (!email || otp == null) {
+      return res.status(400).json({ message: 'Email and otp required' });
+    }
 
-  // atomically check code + expiry
-  const result = await Brand.findOneAndUpdate(
-    {
-      email,
+    const doc = await VerifyEmail.findOne({
+      email: exactEmailRegex(email),
       otpCode: otp.toString().trim(),
       otpExpiresAt: { $gt: new Date() }
-    },
-    {
-      $set: { 
-        otpVerified: true,
-        // optionally clear the code so it can’t be reused:
-        otpCode: undefined,
-        otpExpiresAt: undefined
-      }
-    },
-    { new: true, runValidators: false }
-  );
+    });
 
-  if (!result) {
-    return res.status(400).json({ message: 'Invalid or expired OTP' });
+    if (!doc) {
+      return res.status(400).json({ message: 'Invalid or expired OTP' });
+    }
+
+    // Mark verified and clear OTP values
+    doc.verified = true;
+    doc.verifiedAt = new Date();
+    doc.otpCode = undefined;
+    doc.otpExpiresAt = undefined;
+    await doc.save();
+
+    return res.json({ message: 'OTP verified' });
+  } catch (err) {
+    console.error('Error in verifyOtp:', err);
+    return res.status(500).json({ message: 'Internal server error' });
   }
-
-  return res.json({ message: 'OTP verified' });
 };
 
-// 3) Complete registration
+/**
+ * 3) Complete registration — now checks VerifyEmail instead of Brand.otpVerified
+ * POST /brand/register
+ * Body: { name, email, password, phone, countryId, callingId }
+ */
 exports.register = async (req, res) => {
-  const { name, email, password, phone, countryId, callingId } = req.body;
-  if (!name || !email || !password || !phone || !countryId || !callingId) {
-    return res.status(400).json({ message: 'All fields are required' });
+  try {
+    const { name, email, password, phone, countryId, callingId } = req.body;
+    if (!name || !email || !password || !phone || !countryId || !callingId) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    // Must be verified via VerifyEmail
+    const emailDoc = await VerifyEmail.findOne({ email: exactEmailRegex(email), verified: true });
+    if (!emailDoc) {
+      return res.status(400).json({ message: 'Email not verified' });
+    }
+
+    // Prevent duplicate registration
+    const existing = await Brand.findOne({ email: exactEmailRegex(email) });
+    if (existing) {
+      return res.status(400).json({ message: 'Brand already registered' });
+    }
+
+    // Validate country IDs
+    const countryDoc = await Country.findById(countryId);
+    const callingDoc = await Country.findById(callingId);
+    if (!countryDoc || !callingDoc) {
+      return res.status(400).json({ message: 'Invalid country or calling code' });
+    }
+
+    // Create brand
+    const brand = new Brand({
+      name,
+      email: email.trim(),
+      password,
+      phone,
+      county: countryDoc.countryName,     // preserving your original field name "county"
+      callingcode: callingDoc.callingCode,
+      countryId,
+      callingId
+    });
+
+    // Assign subscription
+    const freePlan = await subscriptionHelper.getFreePlan('Brand');
+    if (freePlan) {
+      const expires = subscriptionHelper.computeExpiry(freePlan);
+      brand.subscription = {
+        planId: freePlan.planId,
+        planName: freePlan.name,
+        startedAt: new Date(),
+        expiresAt: expires,
+        features: (freePlan.features || []).map(f => ({
+          key: f.key,
+          limit: typeof f.value === 'number' ? f.value : 0,
+          used: 0
+        }))
+      };
+      brand.subscriptionExpired = false;
+    }
+
+    const saved = await brand.save();
+
+    // Optional: keep VerifyEmail document as an audit trail, or delete it.
+    // await VerifyEmail.deleteOne({ email: exactEmailRegex(email) });
+
+    return res.status(201).json({ message: 'Registration complete', brand: saved });
+  } catch (error) {
+    console.error('Error in register:', error);
+    return res.status(500).json({ message: 'Internal server error during registration' });
   }
-
-  // fetch brand (must have otpVerified)
-  const brand = await Brand.findOne({ email });
-  if (!brand || !brand.otpVerified) {
-    return res.status(400).json({ message: 'Email not verified' });
-  }
-  if (brand.name) {
-    return res.status(400).json({ message: 'Brand already registered' });
-  }
-
-  // validate country IDs
-  const countryDoc = await Country.findById(countryId);
-  const callingDoc = await Country.findById(callingId);
-  if (!countryDoc || !callingDoc) {
-    return res.status(400).json({ message: 'Invalid country or calling code' });
-  }
-
-  // fill in the rest of fields
-  brand.name        = name;
-  brand.password    = password;
-  brand.phone       = phone;
-  brand.counrty      = countryDoc.countryName;
-  brand.callingcode = callingDoc.callingCode;
-  brand.countryId   = countryId;
-  brand.callingId   = callingId;
-
-  // assign subscription
-  const freePlan = await subscriptionHelper.getFreePlan('Brand');
-  if (freePlan) {
-    const expires = subscriptionHelper.computeExpiry(freePlan);
-    brand.subscription = {
-      planId:    freePlan.planId,
-      planName:  freePlan.name,
-      startedAt: new Date(),
-      expiresAt: expires,
-      features:  freePlan.features.map(f => ({
-        key:   f.key,
-        limit: typeof f.value === 'number' ? f.value : 0,
-        used:  0
-      }))
-    };
-    brand.subscriptionExpired = false;
-  }
-
-  // clear OTP fields
-  brand.otpCode      = undefined;
-  brand.otpExpiresAt = undefined;
-  brand.otpVerified  = true;  // keep as proof
-
-  const saved = await brand.save();
-  res.status(201).json({ message: 'Registration complete', brand: saved });
 };
-
 
 /**
  * Login an existing brand
@@ -154,7 +183,7 @@ exports.login = async (req, res) => {
   try {
     // 1) Find brand by email, case-insensitive
     const brand = await Brand.findOne({
-      email: { $regex: `^${email.trim()}$`, $options: 'i' }
+      email: exactEmailRegex(email)
     });
     if (!brand) return res.status(404).json({ message: 'Brand not found' });
 
@@ -281,46 +310,52 @@ exports.getAllBrands = async (req, res) => {
   }
 };
 
-
-
+/**
+ * POST /brand/password/reset/request
+ * Body: { email }
+ */
 exports.requestPasswordResetOtp = async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ message: 'Email is required' });
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: 'Email is required' });
 
-  // Find registered brand (must have name + password set)
-  const brand = await Brand.findOne({
-    email: { $regex: `^${email.trim()}$`, $options: 'i' },
-    name: { $exists: true, $ne: null }, // indicates completed registration
-    password: { $exists: true, $ne: null }
-  });
+    // Find registered brand (must have name + password set)
+    const brand = await Brand.findOne({
+      email: exactEmailRegex(email),
+      name: { $exists: true, $ne: null },
+      password: { $exists: true, $ne: null }
+    });
 
-  // Security-choice: respond generic even if not found.
-  if (!brand) {
+    // Security-choice: respond generic even if not found.
+    if (!brand) {
+      return res
+        .status(200)
+        .json({ message: 'If an account with that email exists, an OTP has been sent.' });
+    }
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+
+    brand.passwordResetCode = code;
+    brand.passwordResetExpiresAt = expiresAt;
+    brand.passwordResetVerified = false;
+    await brand.save();
+
+    await transporter.sendMail({
+      from: `"No-Reply" <${SMTP_USER}>`,
+      to: brand.email,
+      subject: 'Password reset code',
+      text: `Your password reset OTP is ${code}. It expires in 10 minutes.`
+    });
+
     return res
       .status(200)
       .json({ message: 'If an account with that email exists, an OTP has been sent.' });
+  } catch (err) {
+    console.error('Error in requestPasswordResetOtp:', err);
+    return res.status(500).json({ message: 'Internal server error' });
   }
-
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
-
-  brand.passwordResetCode = code;
-  brand.passwordResetExpiresAt = expiresAt;
-  brand.passwordResetVerified = false;
-  await brand.save();
-
-  await transporter.sendMail({
-    from: `"No-Reply" <${SMTP_USER}>`,
-    to: brand.email,
-    subject: 'Password reset code',
-    text: `Your password reset OTP is ${code}. It expires in 10 minutes.`
-  });
-
-  return res
-    .status(200)
-    .json({ message: 'If an account with that email exists, an OTP has been sent.' });
 };
-
 
 /**
  * POST /brand/password/reset/verify
@@ -328,46 +363,47 @@ exports.requestPasswordResetOtp = async (req, res) => {
  * Verifies OTP & returns a short-lived reset token.
  */
 exports.verifyPasswordResetOtp = async (req, res) => {
-  const { email, otp } = req.body;
-  if (!email || otp == null) {
-    return res.status(400).json({ message: 'Email and otp required' });
+  try {
+    const { email, otp } = req.body;
+    if (!email || otp == null) {
+      return res.status(400).json({ message: 'Email and otp required' });
+    }
+
+    const brand = await Brand.findOne({
+      email: exactEmailRegex(email),
+      passwordResetCode: otp.toString().trim(),
+      passwordResetExpiresAt: { $gt: new Date() }
+    });
+
+    if (!brand) {
+      return res.status(400).json({ message: 'Invalid or expired OTP' });
+    }
+
+    brand.passwordResetVerified = true;
+    // optional: clear code now to prevent reuse
+    brand.passwordResetCode = undefined;
+    brand.passwordResetExpiresAt = undefined;
+    await brand.save();
+
+    // Issue short-lived JWT authorizing password reset
+    const resetToken = jwt.sign(
+      { brandId: brand.brandId, email: brand.email, prt: true }, // prt=password reset token
+      JWT_SECRET,
+      { expiresIn: '100d' } // keeping your existing duration
+    );
+
+    return res.status(200).json({ message: 'OTP verified', resetToken });
+  } catch (err) {
+    console.error('Error in verifyPasswordResetOtp:', err);
+    return res.status(500).json({ message: 'Internal server error' });
   }
-
-  const brand = await Brand.findOne({
-    email: { $regex: `^${email.trim()}$`, $options: 'i' },
-    passwordResetCode: otp.toString().trim(),
-    passwordResetExpiresAt: { $gt: new Date() }
-  });
-
-  if (!brand) {
-    return res.status(400).json({ message: 'Invalid or expired OTP' });
-  }
-
-  brand.passwordResetVerified = true;
-  // optional: clear code now to prevent reuse
-  // (if you clear, keep a flag so you know it was verified)
-  // If you prefer to keep until reset completes, comment next two lines.
-  brand.passwordResetCode = undefined;
-  brand.passwordResetExpiresAt = undefined;
-  await brand.save();
-
-  // Issue short-lived JWT authorizing password reset
-  const resetToken = jwt.sign(
-    { brandId: brand.brandId, email: brand.email, prt: true }, // prt=password reset token
-    JWT_SECRET,
-    { expiresIn: '100d' }
-  );
-
-  return res.status(200).json({ message: 'OTP verified', resetToken });
 };
-
 
 /**
  * POST /brand/password/reset/complete
  * Body: { resetToken, newPassword, confirmPassword? }
  * Requires resetToken from verify step.
  */
-
 exports.resetPassword = async (req, res) => {
   const { resetToken, newPassword, confirmPassword } = req.body;
   if (!resetToken || !newPassword) {
@@ -411,10 +447,13 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
-
-
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
+/**
+ * POST /brand/search
+ * Body: { search, influencerId }
+ * Requires influencer auth middleware that sets req.influencer.{influencerId}
+ */
 exports.searchBrands = async (req, res) => {
   try {
     const requester = req.influencer;  
@@ -432,7 +471,6 @@ exports.searchBrands = async (req, res) => {
       return res.status(400).json({ message: 'search is required' });
     }
 
-
     await delay(300);
 
     const regex = new RegExp(search.trim(), 'i');
@@ -445,7 +483,6 @@ exports.searchBrands = async (req, res) => {
       return res.status(404).json({ message: 'No brands found' });
     }
 
-
     const results = docs.map(d => ({
       name: d.name,
       brandId: d.brandId
@@ -454,6 +491,242 @@ exports.searchBrands = async (req, res) => {
     return res.json({ results });
   } catch (err) {
     console.error('Error in searchBrands:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+// controllers/brandController.js
+
+exports.updateProfile = async (req, res) => {
+  try {
+    // read brandId from body
+    const { brandId, name, phone, countryId, callingId } = req.body || {};
+
+    if (!brandId) {
+      return res.status(400).json({ message: 'brandId is required' });
+    }
+
+    // OPTIONAL: if you still use verifyToken, ensure the body brandId matches the token
+    if (req.brand && req.brand.brandId && req.brand.brandId !== brandId) {
+      return res.status(403).json({ message: 'Forbidden: brandId mismatch' });
+    }
+
+    // require at least one change
+    if (
+      name == null &&
+      phone == null &&
+      countryId == null &&
+      callingId == null
+    ) {
+      return res.status(400).json({ message: 'No changes provided' });
+    }
+
+    const brand = await Brand.findOne({ brandId });
+    if (!brand) return res.status(404).json({ message: 'Brand not found' });
+
+    if (name != null) brand.name = String(name).trim();
+    if (phone != null) brand.phone = String(phone).trim();
+
+    if (countryId) {
+      const countryDoc = await Country.findById(countryId);
+      if (!countryDoc) return res.status(400).json({ message: 'Invalid countryId' });
+      brand.countryId = countryId;
+      brand.county = countryDoc.countryName; // your original field name
+    }
+
+    if (callingId) {
+      const callingDoc = await Country.findById(callingId);
+      if (!callingDoc) return res.status(400).json({ message: 'Invalid callingId' });
+      brand.callingId = callingId;
+      brand.callingcode = callingDoc.callingCode;
+    }
+
+    await brand.save();
+
+    const safe = brand.toObject();
+    delete safe.password;
+    delete safe._id;
+    delete safe.__v;
+
+    return res.status(200).json({ message: 'Profile updated', brand: safe });
+  } catch (err) {
+    console.error('Error in updateProfile:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+exports.requestEmailUpdate = async (req, res) => {
+  try {
+    const { brandId, newEmail } = req.body || {};
+
+    if (!brandId) {
+      return res.status(400).json({ message: 'brandId is required' });
+    }
+    // OPTIONAL: if using verifyToken middleware, ensure token matches body
+    if (req.brand && req.brand.brandId && req.brand.brandId !== brandId) {
+      return res.status(403).json({ message: 'Forbidden: brandId mismatch' });
+    }
+
+    if (!newEmail || !emailRegex.test(String(newEmail).trim())) {
+      return res.status(400).json({ message: 'Valid newEmail is required' });
+    }
+
+    const brand = await Brand.findOne({ brandId });
+    if (!brand) return res.status(404).json({ message: 'Brand not found' });
+
+    const oldEmail = brand.email.trim();
+    const nextEmail = String(newEmail).trim();
+
+    if (oldEmail.toLowerCase() === nextEmail.toLowerCase()) {
+      return res.status(400).json({ message: 'New email cannot be the same as current email' });
+    }
+
+    // Ensure newEmail not used by any other brand
+    const taken = await Brand.findOne({
+      email: exactEmailRegex(nextEmail),
+      brandId: { $ne: brandId }
+    });
+    if (taken) return res.status(409).json({ message: 'Email already in use' });
+
+    // Generate OTPs and expiry
+    const oldOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // OLD email: ensure a VerifyEmail doc exists; mark verified (it already was),
+    // then set a fresh OTP for confirmation
+    await VerifyEmail.findOneAndUpdate(
+      { email: exactEmailRegex(oldEmail) },
+      {
+        $setOnInsert: { email: oldEmail, verified: true, verifiedAt: new Date() },
+        $set: { otpCode: oldOtp, otpExpiresAt: expiresAt },
+        $inc: { attempts: 1 }
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    // NEW email: upsert, force verified=false until confirmed, set OTP
+    await VerifyEmail.findOneAndUpdate(
+      { email: exactEmailRegex(nextEmail) },
+      {
+        $set: { email: nextEmail, verified: false, verifiedAt: null, otpCode: newOtp, otpExpiresAt: expiresAt },
+        $inc: { attempts: 1 }
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    // Send both OTPs
+    await transporter.sendMail({
+      from: `"No-Reply" <${SMTP_USER}>`,
+      to: oldEmail,
+      subject: 'Confirm email change (old email verification)',
+      text: `Your OTP to confirm changing away from this email is ${oldOtp}. It expires in 10 minutes.`
+    });
+
+    await transporter.sendMail({
+      from: `"No-Reply" <${SMTP_USER}>`,
+      to: nextEmail,
+      subject: 'Confirm email change (new email verification)',
+      text: `Your OTP to confirm using this as your new email is ${newOtp}. It expires in 10 minutes.`
+    });
+
+    return res.status(200).json({ message: 'OTPs sent to old and new emails' });
+  } catch (err) {
+    console.error('Error in requestEmailUpdate:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+// =================== POST /brand/email/update/verify ===================
+/**
+ * Body: { brandId, newEmail, oldOtp, newOtp }
+ * - Validate both OTPs (old & new) via VerifyEmail
+ * - Update Brand.email -> newEmail
+ * - VerifyEmail(oldEmail).verified = false (clear OTPs)
+ * - VerifyEmail(newEmail).verified = true (clear OTPs, set verifiedAt)
+ * - Return fresh JWT
+ */
+exports.verifyEmailUpdate = async (req, res) => {
+  try {
+    const { brandId, newEmail, oldOtp, newOtp } = req.body || {};
+
+    if (!brandId) {
+      return res.status(400).json({ message: 'brandId is required' });
+    }
+    // OPTIONAL: if using verifyToken middleware, ensure token matches body
+    if (req.brand && req.brand.brandId && req.brand.brandId !== brandId) {
+      return res.status(403).json({ message: 'Forbidden: brandId mismatch' });
+    }
+
+    if (!newEmail || !emailRegex.test(String(newEmail).trim())) {
+      return res.status(400).json({ message: 'Valid newEmail is required' });
+    }
+    if (!oldOtp || !newOtp) {
+      return res.status(400).json({ message: 'Both oldOtp and newOtp are required' });
+      }
+
+    const brand = await Brand.findOne({ brandId });
+    if (!brand) return res.status(404).json({ message: 'Brand not found' });
+
+    const oldEmail = brand.email.trim();
+    const nextEmail = String(newEmail).trim();
+
+    // 1) Check OTP for old email
+    const oldDoc = await VerifyEmail.findOne({
+      email: exactEmailRegex(oldEmail),
+      otpCode: oldOtp.toString().trim(),
+      otpExpiresAt: { $gt: new Date() }
+    });
+    if (!oldDoc) {
+      return res.status(400).json({ message: 'Invalid or expired OTP for old email' });
+    }
+
+    // 2) Check OTP for new email
+    const newDoc = await VerifyEmail.findOne({
+      email: exactEmailRegex(nextEmail),
+      otpCode: newOtp.toString().trim(),
+      otpExpiresAt: { $gt: new Date() }
+    });
+    if (!newDoc) {
+      return res.status(400).json({ message: 'Invalid or expired OTP for new email' });
+    }
+
+    // 3) Make sure no other brand owns that new email
+    const taken = await Brand.findOne({
+      email: exactEmailRegex(nextEmail),
+      brandId: { $ne: brandId }
+    });
+    if (taken) return res.status(409).json({ message: 'Email already in use' });
+
+    // 4) Update Brand email
+    brand.email = nextEmail;
+    await brand.save();
+
+    // 5) Flip verification flags and clear OTPs
+    oldDoc.verified = false;
+    oldDoc.verifiedAt = null;
+    oldDoc.otpCode = undefined;
+    oldDoc.otpExpiresAt = undefined;
+    await oldDoc.save();
+
+    newDoc.verified = true;
+    newDoc.verifiedAt = new Date();
+    newDoc.otpCode = undefined;
+    newDoc.otpExpiresAt = undefined;
+    await newDoc.save();
+
+    // 6) Fresh JWT reflecting new email
+    const token = jwt.sign(
+      { brandId: brand.brandId, email: brand.email },
+      JWT_SECRET,
+      { expiresIn: '100d' }
+    );
+
+    return res.status(200).json({ message: 'Email updated successfully', email: brand.email, token });
+  } catch (err) {
+    console.error('Error in verifyEmailUpdate:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };

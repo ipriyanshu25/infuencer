@@ -27,7 +27,7 @@ const brandSchema = new mongoose.Schema({
   name: { type: String, required: true },
   password: { type: String, minlength: 8, required: true },
   phone: { type: String, match: [phoneRegex, 'Invalid phone'], required: true },
-  county: { type: String, required: true },
+  country: { type: String, required: true },
   callingcode: { type: String, required: true },
   countryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true },
   callingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Country', required: true },

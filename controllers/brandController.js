@@ -137,7 +137,7 @@ exports.register = async (req, res) => {
       email: email.trim(),
       password,
       phone,
-      county: countryDoc.countryName,     // preserving your original field name "county"
+      country: countryDoc.countryName,     // preserving your original field name "county"
       callingcode: callingDoc.callingCode,
       countryId,
       callingId
@@ -532,7 +532,7 @@ exports.updateProfile = async (req, res) => {
       const countryDoc = await Country.findById(countryId);
       if (!countryDoc) return res.status(400).json({ message: 'Invalid countryId' });
       brand.countryId = countryId;
-      brand.county = countryDoc.countryName; // your original field name
+      brand.country = countryDoc.countryName; // your original field name
     }
 
     if (callingId) {

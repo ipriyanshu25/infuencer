@@ -13,6 +13,7 @@ const Contract   = require('../models/contract');
 /**
  * Generic JWT verifier — populates req.user with the decoded token.
  */
+
 exports.verifyToken = (req, res, next) => {
   const authHeader = req.headers['authorization'] || '';
   if (!authHeader.startsWith('Bearer ')) {

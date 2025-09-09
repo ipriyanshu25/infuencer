@@ -11,7 +11,7 @@ exports.createMilestone = async (req, res) => {
     milestoneTitle,
     amount,
     milestoneDescription = ''
-  } = req.body;
+  } = req.body; 
 
   // 0) Coerce and validate amount
   const amountNum = Number(amount);

@@ -1,20 +1,9 @@
 // controllers/filterController.js
 const Influencer = require('../models/influencer');
+const { escapeRegExp } = require('../utils/searchTokens');
 
 /**
  * POST /api/influencers/getlist
- * Body (all fields optional):
- *   - categories:      [<InterestId>, …]
- *   - audienceRange:   <string>
- *   - ageGroup:        <string>
- *   - gender:          0|1|2
- *   - countryId:       <CountryId>
- *   - platformId:      <PlatformId>
- *   - malePercentage:   <number>
- *   - femalePercentage: <number>
- *   - search:          <string>    // partial match on name/description
- *   - page:            <number>    // 1-based page number
- *   - limit:           <number>    // items per page
  */
 exports.getFilteredInfluencers = async (req, res) => {
   try {
@@ -32,29 +21,31 @@ exports.getFilteredInfluencers = async (req, res) => {
       limit = 10
     } = req.body || {};
 
-    // Build base filter
     const filter = {};
+
+    // categories: array of ObjectIds/ids
     if (Array.isArray(categories) && categories.length) {
       filter.categories = { $in: categories };
     }
-    if (typeof audienceRange === 'string') {
-      filter.audienceRange = audienceRange;
-    }
-    if (typeof ageGroup === 'string') {
-      filter.audienceAgeRange = ageGroup;
-    }
-    if ([0, 1, 2].includes(gender)) {
-      filter.gender = gender;
-    }
-    // Support single or multiple country IDs via countryId field
+
+    // simple string fields stored in doc
+    if (typeof audienceRange === 'string') filter.audienceRange = audienceRange;
+    if (typeof ageGroup === 'string') filter.audienceAgeRange = ageGroup;
+
+    // gender enum [0,1,2]
+    if ([0, 1, 2].includes(Number(gender))) filter.gender = Number(gender);
+
+    // countryId: accept array or scalar
     if (Array.isArray(countryId) && countryId.length) {
       filter.countryId = { $in: countryId };
     } else if (countryId) {
       filter.countryId = countryId;
     }
-    if (platformId) {
-      filter.platformId = platformId;
-    }
+
+    // platform
+    if (platformId) filter.platformId = platformId;
+
+    // audience bifurcation
     if (typeof malePercentage === 'number') {
       filter['audienceBifurcation.malePercentage'] = { $gte: malePercentage };
     }
@@ -62,37 +53,55 @@ exports.getFilteredInfluencers = async (req, res) => {
       filter['audienceBifurcation.femalePercentage'] = { $gte: femalePercentage };
     }
 
-    // Optional text search on name / bio / etc.
+    // 🔎 Search: fast prefix on _ac + robust fallbacks
     if (typeof search === 'string' && search.trim()) {
-      const regex = new RegExp(search.trim(), 'i');
+      const raw = search.trim();
+      const q = raw.toLowerCase();
+
+      // _ac is expected to be lowercase "search tokens"
+      const rxAcPrefix = new RegExp('^' + escapeRegExp(q));
+      // case-insensitive prefix for human-facing fields
+      const rxPrefixI = new RegExp('^' + escapeRegExp(raw), 'i');
+      // word-boundary-ish prefix for categoryName etc.
+      const rxWordPrefixI = new RegExp('(?:^|\\s)' + escapeRegExp(raw), 'i');
+
+      // Use $or so lack of _ac doesn't zero out results
       filter.$or = [
-        { name: regex },
-        { bio: regex },
-        // add other text fields here...
+        { _ac: { $regex: rxAcPrefix } },        // fast path if _ac is present/lowercased
+        { name: { $regex: rxPrefixI } },
+        { platformName: { $regex: rxPrefixI } },
+        { country: { $regex: rxPrefixI } },
+        { socialMedia: { $regex: rxPrefixI } },
+        // If categoryName is an array of strings, regex on field matches any element
+        { categoryName: { $regex: rxWordPrefixI } }
       ];
     }
 
-    // Calculate pagination
+    // pagination
     const pageNum = Math.max(1, parseInt(page, 10));
     const perPage = Math.max(1, Math.min(100, parseInt(limit, 10)));
     const skip = (pageNum - 1) * perPage;
 
-    // Execute queries in parallel
+    // sorting: keep existing behavior when no search; otherwise sort by name for stability
+    const sortSpec = (typeof search === 'string' && search.trim())
+      ? { name: 1 }
+      : { audienceRange: 1 };
+
     const [totalCount, influencers] = await Promise.all([
       Influencer.countDocuments(filter),
       Influencer.find(filter)
-                .skip(skip)
-                .limit(perPage)
-                .sort({ audienceRange: 1 })
+        .select('-_ac')              // ⬅️ hide server-side search tokens from response
+        .skip(skip)
+        .limit(perPage)
+        .sort(sortSpec)
+        .lean()
     ]);
-
-    const totalPages = Math.ceil(totalCount / perPage);
 
     res.json({
       success: true,
       page: pageNum,
       perPage,
-      totalPages,
+      totalPages: Math.ceil(totalCount / perPage),
       totalCount,
       count: influencers.length,
       data: influencers

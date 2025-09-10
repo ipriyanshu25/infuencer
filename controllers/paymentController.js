@@ -20,7 +20,7 @@ exports.createOrder = async (req, res) => {
     const { amount, currency = 'USD', receipt, userId, role, planId } = req.body;
 
     // Check if required fields are present
-    if (!userId || !role || !planId || !amount) {
+    if (!userId || !role || !planId || !amount ) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 

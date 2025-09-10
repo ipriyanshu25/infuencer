@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const Payment = require('../models/payment');
 const Brand = require('../models/brand');  // Assuming Brand model exists
 const Influencer = require('../models/influencer');  // Assuming Influencer model exists
+const subscriptionHelper = require('../utils/subscriptionHelper');
 
 // initialize Razorpay client
 const razorpay = new Razorpay({
@@ -12,60 +13,100 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-/**
- * Create a new Razorpay order and persist it based on userId (either brandId or influencerId)
- */
 exports.createOrder = async (req, res) => {
   try {
     const { amount, currency = 'USD', receipt, userId, role, planId } = req.body;
 
-    // Check if required fields are present
-    if (!userId || !role || !planId || !amount ) {
-      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    // Basic validations
+    if (!userId || !role || !planId) {
+      return res.status(400).json({ success: false, message: 'Missing required fields: userId, role, planId' });
+    }
+    if (!['Brand', 'Influencer'].includes(String(role))) {
+      return res.status(400).json({ success: false, message: 'role must be "Brand" or "Influencer"' });
     }
 
-    // Fetch brand or influencer based on userId and role
+    // Fetch user
     let user;
     if (role === 'Brand') {
-      // Query by the `brandId` (which is a string UUID)
       user = await Brand.findOne({ brandId: userId });
-    } else if (role === 'Influencer') {
+    } else {
       user = await Influencer.findOne({ influencerId: userId });
     }
-
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // amount in cents for USD
+    // Check if this is a FREE plan selection (role-scoped)
+    const isInfluencerFree = role === 'Influencer' && planId === FREE_PLAN_ID_INFLUENCER;
+    const isBrandFree      = role === 'Brand'      && planId === FREE_PLAN_ID_BRAND;
+
+    // If planId matches the FREE plan for the given role → apply free plan directly
+    if (isInfluencerFree || isBrandFree) {
+      const freePlan = await subscriptionHelper.getFreePlan(role);
+      if (!freePlan) {
+        return res.status(500).json({ success: false, message: 'Free plan is not configured' });
+      }
+
+      // Assign free subscription
+      const features = (freePlan.features || []).map(f => ({
+        key: f.key,
+        limit: typeof f.value === 'number' ? f.value : 0,
+        used: 0
+      }));
+
+      const subPayload = {
+        planId: freePlan.planId || planId, // keep provided planId as fallback
+        planName: freePlan.name || 'free',
+        startedAt: new Date(),
+        expiresAt: subscriptionHelper.computeExpiry(freePlan),
+        features
+      };
+
+      user.subscription = subPayload;
+      user.subscriptionExpired = false;
+      await user.save();
+
+      // No Payment record, no Razorpay order — this is FREE
+      return res.status(200).json({
+        success: true,
+        free: true,
+        message: 'Free plan activated',
+        subscription: subPayload
+      });
+    }
+
+    // Not a FREE plan → do the normal paid order flow
+    if (!amount) {
+      return res.status(400).json({ success: false, message: 'amount is required for paid plans' });
+    }
+
     const options = {
-      amount: Math.round(amount * 100),
+      amount: Math.round(Number(amount) * 100), // Razorpay expects minor units
       currency,
       receipt: receipt || crypto.randomBytes(10).toString('hex'),
     };
 
-    // create order in Razorpay
     const order = await razorpay.orders.create(options);
 
-    // save to DB with user (brand or influencer), plan and role reference
     await Payment.create({
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
       receipt: order.receipt,
-      userId, // Store the UUID userId
-      planId,
-      role,
+      userId,   // UUID
+      planId,   // requested plan
+      role,     // Brand | Influencer
       status: 'created',
       createdAt: new Date()
     });
 
-    res.status(201).json({ success: true, order });
+    return res.status(201).json({ success: true, order });
   } catch (error) {
     console.error('Error in createOrder:', error);
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
+
 
 
 /**

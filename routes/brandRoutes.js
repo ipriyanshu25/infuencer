@@ -41,9 +41,9 @@ router.post(
   searchInfluencers
 );
 
-router.post('/updateProfile',verifyToken,updateProfile);
+router.post('/update',verifyToken,updateProfile);
 
-router.post('/requestEmailUpdate',verifyToken,requestEmailUpdate);
+router.post('/requestEmailOtp',verifyToken,requestEmailUpdate);
 
 router.post('/verifyEmailUpdate',verifyToken,verifyEmailUpdate);
 

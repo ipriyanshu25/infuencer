@@ -434,11 +434,42 @@ exports.getById = async (req, res) => {
     return res.status(400).json({ message: 'influencerId query parameter is required' });
   }
   try {
-    const influencer = await Influencer.findOne({ influencerId: id }, '-password -__v');
-    if (!influencer) {
+    // Exclude sensitive/internal fields up front
+    const projection =
+      '-password -__v -_id -_ac -paymentMethods -platformId -audienceAgeRangeId -audienceId -countryId -callingId -categories -subscription.planId';
+
+    const doc = await Influencer.findOne({ influencerId: id }, projection).lean();
+    if (!doc) {
       return res.status(404).json({ message: 'Influencer not found' });
     }
-    return res.status(200).json(influencer);
+
+    const genderMap = { 0: 'male', 1: 'female', 2: 'other' };
+    const out = { ...doc };
+
+    // Preserve influencerId, then remove any remaining *Id keys at root
+    const influId = out.influencerId;
+    Object.keys(out).forEach((k) => {
+      if (k !== 'influencerId' && /id$/i.test(k)) delete out[k];
+    });
+
+    // Ensure nested planId is gone (in case projection changes later)
+    if (out.subscription && 'planId' in out.subscription) {
+      delete out.subscription.planId;
+    }
+
+    // Rename influencerId -> InfluencerID
+    delete out.influencerId;
+    out.InfluencerID = influId;
+
+    // Map gender number -> string
+    if (typeof out.gender === 'number') {
+      out.gender = genderMap[out.gender] ?? out.gender;
+    } else if (typeof out.gender === 'string' && /^\d+$/.test(out.gender)) {
+      const code = parseInt(out.gender, 10);
+      out.gender = genderMap[code] ?? out.gender;
+    }
+
+    return res.status(200).json(out);
   } catch (error) {
     console.error('Error fetching influencer by ID:', error);
     return res.status(500).json({ message: 'Internal server error' });

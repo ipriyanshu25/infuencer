@@ -17,6 +17,7 @@ const Platform = require('../models/platform');
 const Audience = require('../models/audienceRange');
 const Campaign = require('../models/campaign');
 const { escapeRegExp } = require('../utils/searchTokens');
+const VerifyEmail = require('../models/verifyEmail');
 
 const SMTP_HOST = process.env.SMTP_HOST;
 const SMTP_PORT = parseInt(process.env.SMTP_PORT, 10);
@@ -60,71 +61,102 @@ exports.uploadProfileImage = upload.single('profileImage');
 
 // Request OTP (upsert, now defensive)
 exports.requestOtpInfluencer = async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ message: 'Email is required' });
+  const { email, role } = req.body;
 
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  if (!email || !role) {
+    return res.status(400).json({ message: 'Both email and role are required' });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const normalizedRole = String(role).trim();
+  if (!['Influencer', 'Brand'].includes(normalizedRole)) {
+    return res.status(400).json({ message: 'role must be "Influencer" or "Brand"' });
+  }
 
   try {
-    await Influencer.findOneAndUpdate(
-      { email },
+    // If already registered for that role, block OTP
+    const emailRegexCI = new RegExp(`^${escapeRegExp(normalizedEmail)}$`, 'i');
+    const alreadyRegistered =
+      normalizedRole === 'Influencer'
+        ? await Influencer.findOne({ email: emailRegexCI }, '_id')
+        : await Brand.findOne({ email: emailRegexCI }, '_id');
+
+    if (alreadyRegistered) {
+      return res.status(409).json({ message: 'User already present' });
+    }
+
+    // Issue OTP via VerifyEmail record (do NOT upsert Influencer/Brand)
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await VerifyEmail.findOneAndUpdate(
+      { email: normalizedEmail, role: normalizedRole },
       {
         $set: {
           otpCode: code,
           otpExpiresAt: expiresAt,
-          otpVerified: false
-        }
+          verified: false
+        },
+        $inc: { attempts: 1 }
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
     );
+
+    try {
+      await transporter.sendMail({
+        from: `"No-Reply" <${SMTP_USER}>`,
+        to: normalizedEmail,
+        subject: 'Verify your email',
+        text: `Your verification code is ${code}. It expires in 10 minutes.`
+      });
+    } catch (mailErr) {
+      console.warn('Failed to send OTP email:', mailErr.message);
+      // continue: we still return success to avoid leaking existence
+    }
+
+    return res.json({ message: 'OTP sent to email' });
   } catch (err) {
     if (err.code === 11000) {
-      console.error('Duplicate key during OTP upsert:', err.message);
-      return res.status(409).json({ message: 'Conflict while creating/updating influencer record.' });
+      return res.status(409).json({ message: 'Conflict while creating/updating verification record.' });
     }
     console.error('Error in requestOtpInfluencer:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
-
-  try {
-    await transporter.sendMail({
-      from: `"No-Reply" <${SMTP_USER}>`,
-      to: email,
-      subject: 'Verify Influencer',
-      text: `Your verification code is ${code}. It expires in 10 minutes.`
-    });
-  } catch (mailErr) {
-    console.warn('Failed to send OTP email:', mailErr.message);
-  }
-
-  res.json({ message: 'OTP sent to email' });
 };
 
 
 exports.verifyOtpInfluencer = async (req, res) => {
-  const { email, otp } = req.body;
-  if (!email || otp == null) {
-    return res.status(400).json({ message: 'Email and otp required' });
+  const { email, role, otp } = req.body;
+
+  if (!email || !role || otp == null) {
+    return res.status(400).json({ message: 'email, role and otp are required' });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const normalizedRole = String(role).trim();
+
+  if (!['Influencer', 'Brand'].includes(normalizedRole)) {
+    return res.status(400).json({ message: 'role must be "Influencer" or "Brand"' });
   }
 
   try {
-    const updated = await Influencer.findOneAndUpdate(
-      {
-        email,
-        otpCode: otp.toString().trim(),
-        otpExpiresAt: { $gt: new Date() }
-      },
-      {
-        $set: { otpVerified: true },
-        $unset: { otpCode: "", otpExpiresAt: "" }
-      },
-      { new: true, runValidators: false }
-    );
+    const doc = await VerifyEmail.findOne({
+      email: normalizedEmail,
+      role: normalizedRole,
+      otpCode: otp.toString().trim(),
+      otpExpiresAt: { $gt: new Date() }
+    });
 
-    if (!updated) {
+    if (!doc) {
       return res.status(400).json({ message: 'Invalid or expired OTP' });
     }
+
+    doc.verified = true;
+    doc.verifiedAt = new Date();
+    doc.otpCode = undefined;
+    doc.otpExpiresAt = undefined;
+    await doc.save();
+
     return res.json({ message: 'Email verified — you may now complete registration' });
   } catch (err) {
     console.error('Error in verifyOtpInfluencer:', err);
@@ -158,22 +190,35 @@ exports.registerInfluencer = async (req, res) => {
       bio
     } = req.body;
 
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+
+    // Ensure email was verified for Influencer role
+    const verifiedRec = await VerifyEmail.findOne({
+      email: normalizedEmail,
+      role: 'Influencer',
+      verified: true
+    });
+
+    if (!verifiedRec) {
+      return res.status(400).json({ message: 'Email not verified' });
+    }
+
+    // Prevent duplicate registration
+    const emailRegexCI = new RegExp(`^${escapeRegExp(normalizedEmail)}$`, 'i');
+    const already = await Influencer.findOne({ email: emailRegexCI }, '_id');
+    if (already) {
+      return res.status(400).json({ message: 'Already registered' });
+    }
+
     if (typeof categories === 'string') {
       try {
         categories = JSON.parse(categories);
       } catch {
         return res.status(400).json({ message: 'categories must be a JSON array' });
       }
-    }
-
-    const inf = await Influencer.findOne({
-      email: { $regex: `^${email.trim()}$`, $options: 'i' }
-    });
-    if (!inf || !inf.otpVerified) {
-      return res.status(400).json({ message: 'Email not verified' });
-    }
-    if (inf.name) {
-      return res.status(400).json({ message: 'Already registered' });
     }
 
     let platformDoc = await Platform.findOne({ platformId });
@@ -208,6 +253,9 @@ exports.registerInfluencer = async (req, res) => {
     if (!ageRangeDoc || !countRangeDoc || !countryDoc || !callingDoc) {
       return res.status(400).json({ message: 'Invalid reference IDs' });
     }
+
+    // Create a fresh Influencer doc (we no longer upsert during OTP)
+    const inf = new Influencer({ email: normalizedEmail });
 
     inf.name = name;
     inf.password = password;
@@ -259,6 +307,10 @@ exports.registerInfluencer = async (req, res) => {
     }
 
     await inf.save();
+
+    // Clean up verification record so we don't keep "verified" state around
+    await VerifyEmail.deleteOne({ email: normalizedEmail, role: 'Influencer' });
+
     return res.status(201).json({
       message: 'Influencer registered successfully',
       influencerId: inf.influencerId,
@@ -937,5 +989,307 @@ exports.suggestInfluencers = async (req, res) => {
   } catch (err) {
     console.error('Suggestion error:', err);
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+// =====================================
+// 1) updateProfile  (no email updates)
+// =====================================
+exports.updateProfile = async (req, res) => {
+  try {
+    const {
+      influencerId,
+      // DO NOT accept email here – email changes via requestEmailUpdate + verifyotp only
+      name,
+      password,
+      phone,
+      socialMedia,
+      gender,
+      platformId,
+      manualPlatformName,
+      profileLink,
+      malePercentage,
+      femalePercentage,
+      categories,
+      audienceAgeRangeId,
+      audienceId,
+      countryId,
+      callingId,
+      bio
+    } = req.body || {};
+
+    if (!influencerId) {
+      return res.status(400).json({ message: 'influencerId is required' });
+    }
+
+    const inf = await Influencer.findOne({ influencerId });
+    if (!inf) {
+      return res.status(404).json({ message: 'Influencer not found' });
+    }
+
+    if (typeof req.body.email !== 'undefined') {
+      return res.status(400).json({ message: 'Email cannot be updated here. Use requestEmailUpdate & verifyotp.' });
+    }
+
+    // Optional: update profile image if sent (use the same upload middleware on the route)
+    if (req.file) {
+      inf.profileImage = `/uploads/profile_images/${req.file.filename}`;
+    }
+
+    if (typeof name !== 'undefined') inf.name = name;
+    if (typeof password !== 'undefined' && password) inf.password = password; // hashed by pre-save hook
+    if (typeof phone !== 'undefined') inf.phone = phone;
+    if (typeof socialMedia !== 'undefined') inf.socialMedia = socialMedia;
+    if (typeof gender !== 'undefined') inf.gender = Number(gender);
+    if (typeof profileLink !== 'undefined') inf.profileLink = profileLink;
+    if (typeof bio !== 'undefined') inf.bio = bio;
+
+    // Platform update (optional)
+    if (typeof platformId !== 'undefined') {
+      let platformDoc = await Platform.findOne({ platformId });
+      if (!platformDoc) {
+        return res.status(400).json({ message: 'Invalid platformId' });
+      }
+      if (platformDoc.name === 'Other') {
+        if (!manualPlatformName?.trim()) {
+          return res.status(400).json({ message: 'manualPlatformName is required when platform is Other' });
+        }
+        platformDoc = await new Platform({ name: manualPlatformName.trim() }).save();
+      }
+      inf.platformId = platformDoc._id;
+      inf.platformName = platformDoc.name;
+    }
+
+    // Categories (optional)
+    if (typeof categories !== 'undefined') {
+      let parsed = categories;
+      if (typeof parsed === 'string') {
+        try { parsed = JSON.parse(parsed); } catch { return res.status(400).json({ message: 'categories must be a JSON array' }); }
+      }
+      if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 3) {
+        return res.status(400).json({ message: 'You must select between 1 and 3 categories' });
+      }
+      const interestDocs = await Interest.find({ _id: { $in: parsed } });
+      if (interestDocs.length !== parsed.length) {
+        return res.status(400).json({ message: 'Invalid category IDs' });
+      }
+      inf.categories = interestDocs.map(d => d._id);
+      inf.categoryName = interestDocs.map(d => d.name);
+    }
+
+    // Audience bifurcation (optional)
+    const hasMale = typeof malePercentage !== 'undefined';
+    const hasFemale = typeof femalePercentage !== 'undefined';
+    if (hasMale || hasFemale) {
+      inf.audienceBifurcation = {
+        malePercentage: hasMale ? Number(malePercentage) : inf.audienceBifurcation?.malePercentage,
+        femalePercentage: hasFemale ? Number(femalePercentage) : inf.audienceBifurcation?.femalePercentage
+      };
+    }
+
+    // Audience Age Range (optional)
+    if (typeof audienceAgeRangeId !== 'undefined') {
+      const ageRangeDoc = await Audience.findOne({ audienceId: audienceAgeRangeId });
+      if (!ageRangeDoc) return res.status(400).json({ message: 'Invalid audienceAgeRangeId' });
+      inf.audienceAgeRangeId = ageRangeDoc._id;
+      inf.audienceAgeRange = ageRangeDoc.range;
+    }
+
+    // Audience Count Range (optional)
+    if (typeof audienceId !== 'undefined') {
+      const countRangeDoc = await AudienceRange.findById(audienceId);
+      if (!countRangeDoc) return res.status(400).json({ message: 'Invalid audienceId' });
+      inf.audienceId = countRangeDoc._id;
+      inf.audienceRange = countRangeDoc.range;
+    }
+
+    // Country / Calling code (optional)
+    if (typeof countryId !== 'undefined') {
+      const countryDoc = await Country.findById(countryId);
+      if (!countryDoc) return res.status(400).json({ message: 'Invalid countryId' });
+      inf.countryId = countryDoc._id;
+      inf.country = countryDoc.countryName;
+    }
+    if (typeof callingId !== 'undefined') {
+      const callingDoc = await Country.findById(callingId);
+      if (!callingDoc) return res.status(400).json({ message: 'Invalid callingId' });
+      inf.callingId = callingDoc._id;
+      inf.callingcode = callingDoc.callingCode;
+    }
+
+    await inf.save();
+    return res.status(200).json({ message: 'Profile updated successfully' });
+  } catch (err) {
+    console.error('Error in updateProfile:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+
+// =====================================================
+// 2) requestEmailUpdate  (send OTP to old & new emails)
+// =====================================================
+exports.requestEmailUpdate = async (req, res) => {
+  try {
+    const { influencerId, newEmail, role } = req.body || {};
+    if (!influencerId || !newEmail || !role) {
+      return res.status(400).json({ message: 'influencerId, newEmail and role are required' });
+    }
+    if (!['Influencer', 'Brand'].includes(String(role))) {
+      return res.status(400).json({ message: 'role must be "Influencer" or "Brand"' });
+    }
+    // This API updates an Influencer only
+    if (role !== 'Influencer') {
+      return res.status(400).json({ message: 'This endpoint is for Influencer role only' });
+    }
+
+    const inf = await Influencer.findOne({ influencerId });
+    if (!inf) return res.status(404).json({ message: 'Influencer not found' });
+
+    const oldEmail = String(inf.email || '').trim().toLowerCase();
+    const nextEmail = String(newEmail).trim().toLowerCase();
+    if (!nextEmail) return res.status(400).json({ message: 'newEmail is required' });
+    if (nextEmail === oldEmail) return res.status(400).json({ message: 'New email must be different from current email' });
+
+    // Ensure new email is not already taken by another Influencer
+    const emailRegexCI = new RegExp(`^${escapeRegExp(nextEmail)}$`, 'i');
+    const exists = await Influencer.findOne({ email: emailRegexCI }, '_id influencerId');
+    if (exists && String(exists.influencerId) !== String(influencerId)) {
+      return res.status(409).json({ message: 'New email already in use' });
+    }
+
+    // Generate OTPs
+    const codeOld = Math.floor(100000 + Math.random() * 900000).toString();
+    const codeNew = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    // Upsert VerifyEmail for OLD email (keep role = Influencer). Do not change verified flag here.
+    await VerifyEmail.findOneAndUpdate(
+      { email: oldEmail, role: 'Influencer' },
+      {
+        $set: { otpCode: codeOld, otpExpiresAt: expiresAt },
+        $inc: { attempts: 1 }
+      },
+      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+
+    // Upsert VerifyEmail for NEW email (role = Influencer). Leave verified=false until success.
+    await VerifyEmail.findOneAndUpdate(
+      { email: nextEmail, role: 'Influencer' },
+      {
+        $set: { otpCode: codeNew, otpExpiresAt: expiresAt, verified: false },
+        $inc: { attempts: 1 }
+      },
+      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+
+    // Send OTPs
+    try {
+      await transporter.sendMail({
+        from: `"No-Reply" <${SMTP_USER}>`,
+        to: oldEmail,
+        subject: 'Confirm your email change (OLD email)',
+        text: `OTP to confirm email change (old email): ${codeOld}. It expires in 10 minutes.`
+      });
+    } catch (e) {
+      console.warn('Failed to send OTP to old email:', e.message);
+    }
+
+    try {
+      await transporter.sendMail({
+        from: `"No-Reply" <${SMTP_USER}>`,
+        to: nextEmail,
+        subject: 'Confirm your email change (NEW email)',
+        text: `OTP to confirm email change (new email): ${codeNew}. It expires in 10 minutes.`
+      });
+    } catch (e) {
+      console.warn('Failed to send OTP to new email:', e.message);
+    }
+
+    return res.status(200).json({ message: 'OTPs sent to old and new emails' });
+  } catch (err) {
+    console.error('Error in requestEmailUpdate:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+// ======================================================================
+// 3) verifyotp  (verify both OTPs; swap email; flip old verified=false)
+// ======================================================================
+exports.verifyotp = async (req, res) => {
+  try {
+    const { influencerId, role, oldEmailOtp, newEmailOtp, newEmail } = req.body || {};
+    if (!influencerId || !role || !oldEmailOtp || !newEmailOtp || !newEmail) {
+      return res.status(400).json({ message: 'influencerId, role, oldEmailOtp, newEmailOtp, and newEmail are required' });
+    }
+    if (String(role) !== 'Influencer') {
+      return res.status(400).json({ message: 'role must be "Influencer" for this endpoint' });
+    }
+
+    const inf = await Influencer.findOne({ influencerId });
+    if (!inf) return res.status(404).json({ message: 'Influencer not found' });
+
+    const oldEmail = String(inf.email || '').trim().toLowerCase();
+    const nextEmail = String(newEmail || '').trim().toLowerCase();
+    if (!nextEmail) return res.status(400).json({ message: 'newEmail is required' });
+    if (nextEmail === oldEmail) return res.status(400).json({ message: 'New email must be different from current email' });
+
+    // Double-check new email is still available
+    const emailRegexCI = new RegExp(`^${escapeRegExp(nextEmail)}$`, 'i');
+    const exists = await Influencer.findOne({ email: emailRegexCI }, '_id influencerId');
+    if (exists && String(exists.influencerId) !== String(influencerId)) {
+      return res.status(409).json({ message: 'New email already in use' });
+    }
+
+    const now = new Date();
+
+    // Verify OLD email OTP
+    const oldVE = await VerifyEmail.findOne({
+      email: oldEmail,
+      role: 'Influencer',
+      otpCode: String(oldEmailOtp).trim(),
+      otpExpiresAt: { $gt: now }
+    });
+    if (!oldVE) {
+      return res.status(400).json({ message: 'Invalid or expired OTP for old email' });
+    }
+
+    // Verify NEW email OTP
+    const newVE = await VerifyEmail.findOne({
+      email: nextEmail,
+      role: 'Influencer',
+      otpCode: String(newEmailOtp).trim(),
+      otpExpiresAt: { $gt: now }
+    });
+    if (!newVE) {
+      return res.status(400).json({ message: 'Invalid or expired OTP for new email' });
+    }
+
+    // All good → update influencer email
+    inf.email = nextEmail;
+    await inf.save();
+
+    // Update verifyEmail rows:
+    // - Old email → set verified=false; clear OTP
+    oldVE.verified = false;
+    oldVE.otpCode = undefined;
+    oldVE.otpExpiresAt = undefined;
+    oldVE.verifiedAt = new Date();
+    await oldVE.save();
+
+    // - New email → set verified=true; clear OTP
+    newVE.verified = true;
+    newVE.otpCode = undefined;
+    newVE.otpExpiresAt = undefined;
+    newVE.verifiedAt = new Date();
+    await newVE.save();
+
+    return res.status(200).json({ message: 'Email updated successfully' });
+  } catch (err) {
+    console.error('Error in verifyotp:', err);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 };

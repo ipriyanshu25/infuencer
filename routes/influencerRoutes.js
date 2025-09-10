@@ -18,7 +18,10 @@ viewPaymentByType,
 addPaymentMethod,
 deletePaymentMethod,
 updatePaymentMethod,
-suggestInfluencers
+suggestInfluencers,
+updateProfile,
+requestEmailUpdate,
+verifyotp
 } = require('../controllers/influencerController');
 
 
@@ -50,5 +53,9 @@ router.post(
   verifyToken,
   searchBrands
 );  
+
+router.post('/updateProfile', verifyToken, uploadProfileImage, updateProfile);
+router.post('/requestEmailUpdate', verifyToken, requestEmailUpdate);
+router.post('/verifyEmailUpdateOtp', verifyToken, verifyotp);
 
 module.exports = router;

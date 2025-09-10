@@ -81,16 +81,22 @@ const influencerSchema = new mongoose.Schema({
   _ac: { type: [String], index: true },
 
   createdAt: { type: Date, default: Date.now },
+
+  // Legacy OTP fields (kept for backward compatibility; not used in new OTP flow)
   otpCode: { type: String },
   otpExpiresAt: { type: Date },
   otpVerified: { type: Boolean, default: false },
+
   passwordResetCode: { type: String },
   passwordResetExpiresAt: { type: Date },
   passwordResetVerified: { type: Boolean, default: false },
+
   paymentMethods: { type: [paymentSchema], default: [] },
+
+  // Keep your original subscription structure
   subscription: {
     planName: { type: String, required: true, default: 'free' },
-    planId: { type: String, ref: 'SubscriptionPlan', required: true, default: 'a58683f0-8d6e-41b0-addd-a718c2622142' },
+    planId: { type: String, required: true, default: 'a58683f0-8d6e-41b0-addd-a718c2622142' },
     startedAt: { type: Date, default: Date.now },
     expiresAt: { type: Date },
     features: {
@@ -102,6 +108,7 @@ const influencerSchema = new mongoose.Schema({
       default: []
     }
   },
+
   subscriptionExpired: { type: Boolean, default: false },
   failedLoginAttempts: { type: Number, default: 0 },
   lockUntil: { type: Date, default: null }
@@ -115,8 +122,6 @@ influencerSchema.index({ audienceRange: 1 });
 influencerSchema.index({ 'audienceBifurcation.malePercentage': 1 });
 influencerSchema.index({ 'audienceBifurcation.femalePercentage': 1 });
 influencerSchema.index({ name: 1 });              // for stable alphabetical sorts
-// _ac already indexed by field definition; you can also make it explicit:
-// influencerSchema.index({ _ac: 1 });
 
 /* -------------------- Keep only one default payment method -------------------- */
 influencerSchema.pre('validate', function (next) {
@@ -130,32 +135,22 @@ influencerSchema.pre('validate', function (next) {
 
 /* ------------------------- Autocomplete Token Builder ------------------------- */
 const AC_FIELDS = ['name', 'categoryName', 'platformName', 'country', 'socialMedia', 'bio'];
-
 const normalize = (s) => (typeof s === 'string' ? s.toLowerCase().trim() : '');
 
-/**
- * Build LOWERCASE tokens for _ac using:
- *  - word edge-ngrams (fast prefix on beginnings of words)
- *  - character n-grams (2–4) so substrings like "sh" match via ^sh
- */
 function buildACTokens(doc) {
   const bag = [];
-
   const pushFor = (val) => {
     const norm = normalize(val);
     if (!norm) return;
-    bag.push(...edgeNgrams(norm));       // word-prefixes
-    bag.push(...charNgrams(norm, 2, 4)); // sliding char n-grams
+    bag.push(...edgeNgrams(norm));
+    bag.push(...charNgrams(norm, 2, 4));
   };
-
   for (const f of AC_FIELDS) {
     const v = doc[f];
     if (!v) continue;
     if (Array.isArray(v)) v.forEach(pushFor);
     else pushFor(v);
   }
-
-  // Deduplicate, drop empties, and cap
   const deduped = Array.from(new Set(bag.filter(Boolean)));
   return deduped.slice(0, 2000);
 }
@@ -175,40 +170,9 @@ influencerSchema.pre('save', async function (next) {
   } catch (e) { next(e); }
 });
 
-influencerSchema.pre('findOneAndUpdate', async function (next) {
-  try {
-    const update = this.getUpdate() || {};
-    const $set = update.$set || {};
-    const $unset = update.$unset || {};
-    const direct = Object.keys(update).filter(k => !k.startsWith('$'));
-
-    const touchesAC = (fields) =>
-      fields.some(f => f in $set || f in $unset || direct.includes(f));
-
-    if (!touchesAC(AC_FIELDS)) return next();
-
-    const oldDoc = await this.model.findOne(this.getQuery()).lean();
-    if (!oldDoc) return next();
-
-    // Build a merged view to generate tokens from
-    const merged = { ...oldDoc, ...$set };
-    for (const k of Object.keys($unset)) delete merged[k];
-    direct.forEach(k => { merged[k] = update[k]; });
-
-    const tokens = buildACTokens(merged);
-    this.setUpdate({ ...update, $set: { ...$set, _ac: tokens } });
-    next();
-  } catch (err) { next(err); }
-});
-
 /* ------------------------------- Methods ------------------------------- */
 influencerSchema.methods.comparePassword = function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
-};
-
-influencerSchema.methods.setDefaultPayment = function (paymentId) {
-  this.paymentMethods.forEach(pm => { pm.isDefault = (pm.paymentId === paymentId); });
-  return this.save();
 };
 
 // Partial unique index on paymentMethods.paymentId

@@ -459,7 +459,7 @@ exports.getById = async (req, res) => {
 
     // Rename influencerId -> InfluencerID
     delete out.influencerId;
-    out.InfluencerID = influId;
+    out.influencerId = influId;
 
     // Map gender number -> string
     if (typeof out.gender === 'number') {

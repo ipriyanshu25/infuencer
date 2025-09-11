@@ -37,8 +37,8 @@ exports.createOrder = async (req, res) => {
     }
 
     // Check if this is a FREE plan selection (role-scoped)
-    const isInfluencerFree = role === 'Influencer' && planId === FREE_PLAN_ID_INFLUENCER;
-    const isBrandFree      = role === 'Brand'      && planId === FREE_PLAN_ID_BRAND;
+    const isInfluencerFree = role === 'Influencer' && planId === "a58683f0-8d6e-41b0-addd-a718c2622142";
+    const isBrandFree      = role === 'Brand'      && planId === "ca41f2c1-7fbd-4e22-b27c-d537ecbaf02a";
 
     // If planId matches the FREE plan for the given role → apply free plan directly
     if (isInfluencerFree || isBrandFree) {

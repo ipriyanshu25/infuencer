@@ -55,7 +55,7 @@ router.post(
 );  
 
 router.post('/updateProfile', verifyToken, uploadProfileImage, updateProfile);
-router.post('/requestEmailUpdate', verifyToken, requestEmailUpdate);
+router.post('/otpEmailUpdate', verifyToken, requestEmailUpdate);
 router.post('/verifyEmailUpdateOtp', verifyToken, verifyotp);
 
 module.exports = router;

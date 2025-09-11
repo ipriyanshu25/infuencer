@@ -32,6 +32,7 @@ const invitationRoutes    = require('./routes/invitationRoutes');
 const filtersRoutes      = require('./routes/filterRoutes');
 const mediaKitRoutes      = require('./routes/mediaKitRoutes');
 const emailRoutes         = require('./routes/emailRoutes');
+const modashRoutes      = require('./routes/modashRoutes');
 
 
 // Models needed inside WS handlers
@@ -197,6 +198,7 @@ app.use('/invitation', invitationRoutes);
 app.use('/filters', filtersRoutes);
 app.use('/media-kit', mediaKitRoutes);
 app.use('/emails', emailRoutes);
+app.use('/modash', modashRoutes);
 /* -------------------------------------------------
   Mongo & start
 ------------------------------------------------- */

@@ -61,7 +61,7 @@ exports.uploadProfileImage = upload.single('profileImage');
 
 // Request OTP (upsert, now defensive)
 exports.requestOtpInfluencer = async (req, res) => {
-  const { email, role } = req.body;
+  const { email, role='Influencer' } = req.body;
 
   if (!email || !role) {
     return res.status(400).json({ message: 'Both email and role are required' });
@@ -126,7 +126,7 @@ exports.requestOtpInfluencer = async (req, res) => {
 
 
 exports.verifyOtpInfluencer = async (req, res) => {
-  const { email, role, otp } = req.body;
+  const { email, role='Influencer', otp } = req.body;
 
   if (!email || !role || otp == null) {
     return res.status(400).json({ message: 'email, role and otp are required' });
@@ -459,7 +459,7 @@ exports.getById = async (req, res) => {
 
     // Rename influencerId -> InfluencerID
     delete out.influencerId;
-    out.InfluencerID = influId;
+    out.influencerId = influId;
 
     // Map gender number -> string
     if (typeof out.gender === 'number') {
@@ -1164,7 +1164,7 @@ exports.updateProfile = async (req, res) => {
 // =====================================================
 exports.requestEmailUpdate = async (req, res) => {
   try {
-    const { influencerId, newEmail, role } = req.body || {};
+    const { influencerId, newEmail, role='Influencer' } = req.body || {};
     if (!influencerId || !newEmail || !role) {
       return res.status(400).json({ message: 'influencerId, newEmail and role are required' });
     }
@@ -1252,7 +1252,7 @@ exports.requestEmailUpdate = async (req, res) => {
 // ======================================================================
 exports.verifyotp = async (req, res) => {
   try {
-    const { influencerId, role, oldEmailOtp, newEmailOtp, newEmail } = req.body || {};
+    const { influencerId, role='Influencer', oldEmailOtp, newEmailOtp, newEmail } = req.body || {};
     if (!influencerId || !role || !oldEmailOtp || !newEmailOtp || !newEmail) {
       return res.status(400).json({ message: 'influencerId, role, oldEmailOtp, newEmailOtp, and newEmail are required' });
     }

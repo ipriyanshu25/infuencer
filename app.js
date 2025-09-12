@@ -6,9 +6,10 @@ const cors      = require('cors');
 const mongoose  = require('mongoose');
 const http      = require('http');
 const WebSocket = require('ws');
+const path      = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-// Routes
+// Routes ... (unchanged)
 const influencerRoutes    = require('./routes/influencerRoutes');
 const countryRoutes       = require('./routes/countryRoutes');
 const brandRoutes         = require('./routes/brandRoutes');
@@ -29,17 +30,21 @@ const dashboardRoutes     = require('./routes/dashboardRoutes');
 const platformRoutes      = require('./routes/platformRoutes');
 const audienceRangeRoutes = require('./routes/audiencerangeRoutes');
 const invitationRoutes    = require('./routes/invitationRoutes');
-const filtersRoutes      = require('./routes/filterRoutes');
+const filtersRoutes       = require('./routes/filterRoutes');
 const mediaKitRoutes      = require('./routes/mediaKitRoutes');
 const emailRoutes         = require('./routes/emailRoutes');
-const modashRoutes      = require('./routes/modashRoutes');
-
+const modashRoutes        = require('./routes/modashRoutes');
 
 // Models needed inside WS handlers
 const ChatRoom = require('./models/chat');
 
 const app    = express();
 const server = http.createServer(app);
+
+/* -------------------------------------------------
+   Serve static uploads so attachment URLs work
+------------------------------------------------- */
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 /* -------------------------------------------------
    WebSocket (ws) setup
@@ -60,6 +65,23 @@ function broadcastToRoom(roomId, payloadString) {
 // Optional heartbeat to terminate dead connections
 function noop() {}
 function heartbeat() { this.isAlive = true; }
+
+function makeReplySnapshot(room, replyTo) {
+  if (!replyTo) return null;
+  const target = room.messages.find(m => m.messageId === replyTo);
+  if (!target) return null;
+  const firstAtt = target.attachments?.[0];
+  return {
+    messageId:  target.messageId,
+    senderId:   target.senderId,
+    text:       (target.text || '').slice(0, 200),
+    hasAttachment: !!firstAtt,
+    attachment: firstAtt ? {
+      originalName: firstAtt.originalName,
+      mimeType: firstAtt.mimeType
+    } : undefined
+  };
+}
 
 wss.on('connection', (ws) => {
   ws.isAlive = true;
@@ -90,21 +112,44 @@ wss.on('connection', (ws) => {
       }
 
       case 'sendChatMessage': {
-        const { roomId, senderId, text, replyTo } = data;
-        if (!roomId || !senderId || !text) return;
+        const { roomId, senderId, text = '', replyTo, attachments = [] } = data;
+        if (!roomId || !senderId || (!text && (!attachments || attachments.length === 0))) return;
 
         const room = await ChatRoom.findOne({ roomId });
         if (!room) {
           console.warn(`WS: room ${roomId} not found`);
           return;
         }
+        const isMember = room.participants.some(p => p.userId === senderId);
+        if (!isMember) {
+          console.warn(`WS: sender ${senderId} not in room ${roomId}`);
+          return;
+        }
+
+        const reply = makeReplySnapshot(room, replyTo);
+
+        const normalized = Array.isArray(attachments) ? attachments.map(a => ({
+          attachmentId: uuidv4(),
+          url: a.url,
+          path: a.path || null,
+          originalName: a.originalName || 'file',
+          mimeType: a.mimeType || 'application/octet-stream',
+          size: Number(a.size || 0),
+          width: a.width || null,
+          height: a.height || null,
+          duration: a.duration || null,
+          thumbnailUrl: a.thumbnailUrl || null,
+          storage: a.storage || 'remote'
+        })) : [];
 
         const msg = {
           messageId: uuidv4(),
           senderId,
           text,
           timestamp: new Date(),
-          replyTo: replyTo || null
+          replyTo: replyTo || null,
+          reply: reply || null,
+          attachments: normalized
         };
 
         room.messages.push(msg);
@@ -199,6 +244,7 @@ app.use('/filters', filtersRoutes);
 app.use('/media-kit', mediaKitRoutes);
 app.use('/emails', emailRoutes);
 app.use('/modash', modashRoutes);
+
 /* -------------------------------------------------
   Mongo & start
 ------------------------------------------------- */

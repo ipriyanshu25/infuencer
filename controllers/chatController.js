@@ -1,5 +1,11 @@
 // controllers/chatController.js
 const { v4: uuidv4 } = require('uuid');
+const path = require('path');
+const fs = require('fs');
+const mime = require('mime-types');
+const sizeOf = require('image-size');
+const multer = require('multer');
+
 const ChatRoom       = require('../models/chat');
 const Brand          = require('../models/brand');
 const Influencer     = require('../models/influencer');
@@ -18,8 +24,54 @@ function broadcast(app, roomId, payloadObj) {
   }
 }
 
+function isUserInRoom(room, userId) {
+  return room.participants.some(p => p.userId === userId);
+}
+
+function makeReplySnapshot(room, replyTo) {
+  if (!replyTo) return null;
+  const target = room.messages.find(m => m.messageId === replyTo);
+  if (!target) return null;
+  const firstAtt = target.attachments?.[0];
+  return {
+    messageId:  target.messageId,
+    senderId:   target.senderId,
+    text:       (target.text || '').slice(0, 200),
+    hasAttachment: !!firstAtt,
+    attachment: firstAtt ? {
+      originalName: firstAtt.originalName,
+      mimeType: firstAtt.mimeType
+    } : undefined
+  };
+}
+
 /* -----------------------------------------------------------
-   1) Create (or return) a one‑to‑one room
+   Multer setup for /chat/send-file
+----------------------------------------------------------- */
+const uploadsRoot = path.join(__dirname, '..', 'uploads', 'chat');
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const { roomId } = req.body;
+    const dir = path.join(uploadsRoot, roomId || 'misc');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: function (req, file, cb) {
+    const ext = path.extname(file.originalname) || `.${mime.extension(file.mimetype) || 'bin'}`;
+    cb(null, `${Date.now()}-${uuidv4()}${ext}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 1024 * 1024 * 100 // 100 MB per file (adjust as you like)
+  }
+});
+
+/* -----------------------------------------------------------
+   1) Create (or return) a one-to-one room
    POST /chat/create-room
    body: { brandId, influencerId }
 ----------------------------------------------------------- */
@@ -76,7 +128,7 @@ exports.getRooms = async (req, res) => {
     if (!userId) return res.status(400).json({ message: 'userId is required' });
 
     const rooms = await ChatRoom.find({ 'participants.userId': userId })
-      .select('roomId participants messages.createdAt messages.text messages.senderId messages.timestamp')
+      .select('roomId participants messages.messageId messages.text messages.senderId messages.timestamp messages.attachments')
       .lean();
 
     const summary = rooms.map(room => {
@@ -98,7 +150,7 @@ exports.getRooms = async (req, res) => {
 /* -----------------------------------------------------------
    3) Fetch last N messages for a room (with optional pagination)
    POST /chat/messages
-   body: { roomId, limit = 50, before? }  // 'before' is ISO date/string to paginate older msgs
+   body: { roomId, limit = 50, before? }
 ----------------------------------------------------------- */
 exports.getMessages = async (req, res) => {
   try {
@@ -123,26 +175,46 @@ exports.getMessages = async (req, res) => {
 };
 
 /* -----------------------------------------------------------
-   4) Send a new message (REST fallback) — supports replyTo
+   4) Send a new message (JSON) — supports replyTo + attachments (URLs)
    POST /chat/send
-   body: { roomId, senderId, text, replyTo? }
+   body: { roomId, senderId, text?, replyTo?, attachments? }
+   - attachments?: [{ url, originalName, mimeType, size, width?, height?, duration?, thumbnailUrl?, storage? }]
 ----------------------------------------------------------- */
 exports.postMessage = async (req, res) => {
   try {
-    const { roomId, senderId, text, replyTo } = req.body;
-    if (!roomId || !senderId || !text) {
-      return res.status(400).json({ message: 'roomId, senderId and text are required' });
+    const { roomId, senderId, text = '', replyTo, attachments = [] } = req.body;
+    if (!roomId || !senderId || (!text && (!attachments || attachments.length === 0))) {
+      return res.status(400).json({ message: 'roomId, senderId and (text or attachments) are required' });
     }
 
     const room = await ChatRoom.findOne({ roomId });
     if (!room) return res.status(404).json({ message: 'Chat room not found' });
+    if (!isUserInRoom(room, senderId)) return res.status(403).json({ message: 'Sender is not a participant of this room' });
+
+    const reply = makeReplySnapshot(room, replyTo);
+
+    const normalized = Array.isArray(attachments) ? attachments.map(a => ({
+      attachmentId: uuidv4(),
+      url: a.url,
+      path: a.path || null,
+      originalName: a.originalName || 'file',
+      mimeType: a.mimeType || 'application/octet-stream',
+      size: Number(a.size || 0),
+      width: a.width || null,
+      height: a.height || null,
+      duration: a.duration || null,
+      thumbnailUrl: a.thumbnailUrl || null,
+      storage: a.storage || 'remote'
+    })) : [];
 
     const msg = {
       messageId: uuidv4(),
       senderId,
       text,
       timestamp: new Date(),
-      replyTo: replyTo || null
+      replyTo: replyTo || null,
+      reply: reply || null,
+      attachments: normalized
     };
 
     room.messages.push(msg);
@@ -163,14 +235,98 @@ exports.postMessage = async (req, res) => {
 };
 
 /* -----------------------------------------------------------
-   5) Edit a message (optional)
+   4b) Send file(s) with multipart/form-data
+   POST /chat/send-file
+   form fields: roomId, senderId, text?, replyTo?
+   files field: files (multiple)
+----------------------------------------------------------- */
+exports.postFileMessage = [
+  upload.array('files', 10), // up to 10 files per message; adjust as needed
+  async (req, res) => {
+    try {
+      const { roomId, senderId, text = '', replyTo } = req.body;
+      if (!roomId || !senderId) {
+        return res.status(400).json({ message: 'roomId and senderId are required' });
+      }
+
+      const room = await ChatRoom.findOne({ roomId });
+      if (!room) return res.status(404).json({ message: 'Chat room not found' });
+      if (!isUserInRoom(room, senderId)) return res.status(403).json({ message: 'Sender is not a participant of this room' });
+
+      const files = req.files || [];
+      if (files.length === 0 && !text) {
+        return res.status(400).json({ message: 'Provide at least one file or text' });
+      }
+
+      // Build public URLs for served static files
+      const host = req.get('host');
+      const protocol = (req.headers['x-forwarded-proto'] || req.protocol || 'http');
+      const baseUrl = `${protocol}://${host}`;
+
+      const attachments = files.map(f => {
+        let width = null, height = null;
+        try {
+          if (f.mimetype && f.mimetype.startsWith('image/')) {
+            const dim = sizeOf(f.path);
+            width = dim?.width || null;
+            height = dim?.height || null;
+          }
+        } catch { /* ignore dimension errors */ }
+
+        const rel = path.relative(path.join(__dirname, '..'), f.path).split(path.sep).join('/'); // relative to project root
+        const url = `${baseUrl}/${rel.replace(/^public\//, '')}`; // if you mount static on '/'
+
+        return {
+          attachmentId: uuidv4(),
+          url,
+          path: f.path,
+          originalName: f.originalname,
+          mimeType: f.mimetype || 'application/octet-stream',
+          size: f.size || 0,
+          width,
+          height,
+          storage: 'local'
+        };
+      });
+
+      const reply = makeReplySnapshot(room, replyTo);
+
+      const msg = {
+        messageId: uuidv4(),
+        senderId,
+        text,
+        timestamp: new Date(),
+        replyTo: replyTo || null,
+        reply: reply || null,
+        attachments
+      };
+
+      room.messages.push(msg);
+      await room.save();
+
+      broadcast(req.app, roomId, {
+        type: 'chatMessage',
+        roomId,
+        message: msg
+      });
+
+      return res.status(201).json({ message: 'File message sent', messageData: msg });
+    } catch (err) {
+      console.error('postFileMessage error:', err);
+      return res.status(500).json({ message: 'Internal server error' });
+    }
+  }
+];
+
+/* -----------------------------------------------------------
+   5) Edit a message (text-only edit keeps attachments intact)
    PATCH /chat/edit
    body: { roomId, messageId, senderId, newText }
 ----------------------------------------------------------- */
 exports.editMessage = async (req, res) => {
   try {
     const { roomId, messageId, senderId, newText } = req.body;
-    if (!roomId || !messageId || !senderId || !newText) {
+    if (!roomId || !messageId || !senderId || typeof newText !== 'string') {
       return res.status(400).json({ message: 'roomId, messageId, senderId, newText required' });
     }
 
@@ -200,8 +356,9 @@ exports.editMessage = async (req, res) => {
   }
 };
 
+
 /* -----------------------------------------------------------
-   6) Delete a message (optional hard delete)
+   6) Delete a message (hard delete + remove local files)
    DELETE /chat/message
    body: { roomId, messageId, senderId }
 ----------------------------------------------------------- */
@@ -221,6 +378,13 @@ exports.deleteMessage = async (req, res) => {
     const msg = room.messages[idx];
     if (msg.senderId !== senderId) {
       return res.status(403).json({ message: 'You can delete only your own messages' });
+    }
+
+    // Try to unlink local attachments
+    for (const att of (msg.attachments || [])) {
+      if (att.storage === 'local' && att.path) {
+        fs.promises.unlink(att.path).catch(() => {}); // ignore errors
+      }
     }
 
     room.messages.splice(idx, 1);

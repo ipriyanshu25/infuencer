@@ -19,8 +19,8 @@ const Country = require('../models/country');
 
 // ===============================
 //  Multer setup for two fields:
-//   • "image"        → for image uploads (stored in `images` array)
-//   • "creativeBreef" → for PDF/document uploads (stored in `creativeBrief` array)
+//   • "image"         → for image uploads (stored in `images` array)
+//   • "creativeBrief" → for PDF/document uploads (stored in `creativeBrief` array)
 // ===============================
 const uploadDir = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(uploadDir)) {
@@ -304,7 +304,7 @@ exports.getCampaignById = async (req, res) => {
 };
 
 // =====================================
-//  UPDATE CAMPAIGN (with isActive logic)
+//  UPDATE CAMPAIGN (with locations fix)
 // =====================================
 exports.updateCampaign = (req, res) => {
   upload(req, res, async function (err) {
@@ -333,29 +333,50 @@ exports.updateCampaign = (req, res) => {
       delete updates.campaignsId;
       delete updates.createdAt;
 
-      // Parse and validate targetAudience if present
+      // Parse and validate targetAudience if present (KEEP `locations` array shape)
       if (updates.targetAudience) {
-        let parsedTA = updates.targetAudience;
-        if (typeof updates.targetAudience === 'string') {
+        let ta = updates.targetAudience;
+        if (typeof ta === 'string') {
           try {
-            parsedTA = JSON.parse(updates.targetAudience);
+            ta = JSON.parse(ta);
           } catch {
             return res.status(400).json({ message: 'Invalid JSON in targetAudience.' });
           }
         }
-        const { age, gender, location } = parsedTA;
-        let audienceData = { age: { MinAge: 0, MaxAge: 0 }, gender: 2, location: '' };
-        if (age && typeof age === 'object') {
-          const { MinAge, MaxAge } = age;
-          if (typeof MinAge === 'number') audienceData.age.MinAge = MinAge;
-          if (typeof MaxAge === 'number') audienceData.age.MaxAge = MaxAge;
+
+        const audienceData = { age: { MinAge: 0, MaxAge: 0 }, gender: 2, locations: [] };
+
+        // age
+        if (ta.age && typeof ta.age === 'object') {
+          const { MinAge, MaxAge } = ta.age;
+          if (!isNaN(Number(MinAge))) audienceData.age.MinAge = Number(MinAge);
+          if (!isNaN(Number(MaxAge))) audienceData.age.MaxAge = Number(MaxAge);
         }
-        if (typeof gender === 'number' && [0, 1, 2].includes(gender)) {
-          audienceData.gender = gender;
+
+        // gender
+        const g = Number(ta.gender);
+        if ([0, 1, 2].includes(g)) audienceData.gender = g;
+
+        // locations: support both "locations" (array) and legacy "location" (single)
+        const rawLocations = Array.isArray(ta.locations)
+          ? ta.locations
+          : (ta.location ? [ta.location] : []);
+
+        for (const loc of rawLocations) {
+          const idCandidate = typeof loc === 'string' ? loc : loc?.countryId;
+          if (!mongoose.Types.ObjectId.isValid(idCandidate)) {
+            return res.status(400).json({ message: `Invalid countryId: ${idCandidate}` });
+          }
+          const country = await Country.findById(idCandidate).lean();
+          if (!country) {
+            return res.status(404).json({ message: `Country not found: ${idCandidate}` });
+          }
+          audienceData.locations.push({
+            countryId: country._id,
+            countryName: country.countryName
+          });
         }
-        if (typeof location === 'string') {
-          audienceData.location = location.trim();
-        }
+
         updates.targetAudience = audienceData;
       }
 
@@ -423,8 +444,8 @@ exports.updateCampaign = (req, res) => {
       }
 
       // If new PDF files were uploaded, overwrite `creativeBrief`
-      if (Array.isArray(req.files['creativeBreef']) && req.files['creativeBreef'].length > 0) {
-        updates.creativeBrief = req.files['creativeBreef'].map(file => {
+      if (Array.isArray(req.files['creativeBrief']) && req.files['creativeBrief'].length > 0) {
+        updates.creativeBrief = req.files['creativeBrief'].map(file => {
           return path.join('uploads', path.basename(file.path));
         });
       }
@@ -494,9 +515,12 @@ exports.getActiveCampaignsByBrand = async (req, res) => {
     // Build the base filter
     const filter = { brandId, isActive: 1 };
 
-    // Add text search on campaign name if provided
+    // Add text search if provided
     if (search) {
-      filter.name = { $regex: search, $options: 'i' };
+      filter.$or = [
+        { brandName: { $regex: search, $options: 'i' } },
+        { productOrServiceName: { $regex: search, $options: 'i' } }
+      ];
     }
 
     // Parse pagination params
@@ -556,7 +580,10 @@ exports.getPreviousCampaigns = async (req, res) => {
     // Build filter for previous (inactive) campaigns
     const filter = { brandId, isActive: 0 };
     if (search) {
-      filter.name = { $regex: search, $options: 'i' };
+      filter.$or = [
+        { brandName: { $regex: search, $options: 'i' } },
+        { productOrServiceName: { $regex: search, $options: 'i' } }
+      ];
     }
 
     // Pagination calculations
@@ -698,8 +725,7 @@ exports.checkApplied = async (req, res) => {
     });
 
     // attach flag
-    campaign.hasApplied = applied ? 1 : 0;   // ← renamed
-
+    campaign.hasApplied = applied ? 1 : 0;
 
     return res.json(campaign);
   } catch (err) {
@@ -709,7 +735,7 @@ exports.checkApplied = async (req, res) => {
 };
 
 
-// controllers/influencerController.js
+// controllers/influencerController.js (left here for convenience)
 exports.getCampaignsByInfluencer = async (req, res) => {
   const { influencerId, search, page = 1, limit = 10 } = req.body;
   if (!influencerId) {
@@ -731,11 +757,11 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       });
     }
 
-    // 2) Build filter → interestId in categories, active only, not yet applied
+    // 2) Build filter → interestId in categories, active only
     const filter = {
       interestId: { $in: categories },
-      isActive: 1,
-      hasApplied: 0     // ← only campaigns where no one (this influencer) has applied
+      isActive: 1
+      // Note: do NOT filter on hasApplied here; it's not a stored field.
     };
     if (search?.trim()) {
       const term = search.trim();
@@ -753,7 +779,7 @@ exports.getCampaignsByInfluencer = async (req, res) => {
     const limNum = Math.max(1, parseInt(limit, 10));
     const skip = (pageNum - 1) * limNum;
 
-    // 4) Count & fetch only unapplied campaigns
+    // 4) Count & fetch
     const [total, campaigns] = await Promise.all([
       Campaign.countDocuments(filter),
       Campaign.find(filter)
@@ -782,8 +808,8 @@ exports.getCampaignsByInfluencer = async (req, res) => {
       const cid = c.campaignId;
       return {
         ...c,
-        hasApplied: 0,                           // guaranteed by the filter
-        hasApproved: 0,                           // fill in if you implement approvals
+        hasApplied: 0,                           // can be filled via checkApplied endpoint
+        hasApproved: 0,                          // fill in if you implement approvals
         isContracted: contractMap.has(cid) ? 1 : 0,
         contractId: contractMap.get(cid) || null,
         isAccepted: acceptedMap.get(cid) || 0
@@ -1167,12 +1193,11 @@ exports.getAcceptedInfluencers = async (req, res) => {
 
     if (search.trim()) {
       const term = search.trim();
-      const regex = new RegExp(term, 'i');              // case‑insensitive
+      const regex = new RegExp(term, 'i');              // case-insensitive
       filter.$or = [
         { name: regex },
         { handle: regex },
         { email: regex }
-        // add more searchable fields if you like
       ];
     }
 
@@ -1215,7 +1240,7 @@ exports.getAcceptedInfluencers = async (req, res) => {
     ]);
 
     /* ----------------------------------------
-       7) Attach contract info  & optional post‑sort
+       7) Attach contract info  & optional post-sort
     ----------------------------------------- */
     let influencers = rawInfluencers.map(i => ({
       ...i,

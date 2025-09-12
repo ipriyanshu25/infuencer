@@ -7,5 +7,9 @@ router.post('/room',    ctrl.createRoom);
 router.post('/rooms',   ctrl.getRooms);
 router.post('/history', ctrl.getMessages);
 router.post('/message', ctrl.postMessage);
+router.post('/edit',        ctrl.editMessage);
+router.post('/message',    ctrl.deleteMessage);
+router.post('/send-file',    ctrl.postFileMessage);
+
 
 module.exports = router;

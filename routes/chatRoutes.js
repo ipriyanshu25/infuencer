@@ -11,5 +11,7 @@ router.post('/edit',        ctrl.editMessage);
 router.post('/message',    ctrl.deleteMessage);
 router.post('/send-file',    ctrl.postFileMessage);
 
+router.post('/download',    ctrl.downloadAttachmentPost);
+
 
 module.exports = router;

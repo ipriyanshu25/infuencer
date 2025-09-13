@@ -6,6 +6,7 @@ const mime = require('mime-types');
 const sizeOf = require('image-size');
 const multer = require('multer');
 
+
 const ChatRoom       = require('../models/chat');
 const Brand          = require('../models/brand');
 const Influencer     = require('../models/influencer');
@@ -399,6 +400,67 @@ exports.deleteMessage = async (req, res) => {
     return res.json({ message: 'Message deleted', messageId });
   } catch (err) {
     console.error('deleteMessage error:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+// controllers/chatController.js
+
+exports.downloadAttachmentPost = async (req, res) => {
+  try {
+    const { roomId, attachmentId, userId } = req.body;
+
+    if (!roomId || !attachmentId) {
+      return res.status(400).json({ message: 'roomId and attachmentId are required' });
+    }
+    if (!userId) {
+      return res.status(400).json({ message: 'userId is required' });
+    }
+
+    const room = await ChatRoom.findOne({ roomId });
+    if (!room) return res.status(404).json({ message: 'Chat room not found' });
+
+    // Only participants can download
+    if (!isUserInRoom(room, userId)) {
+      return res.status(403).json({ message: 'You are not a participant of this room' });
+    }
+
+    // Find the attachment inside any message
+    let targetAttachment = null;
+    for (const m of room.messages) {
+      const found = (m.attachments || []).find(a => a.attachmentId === attachmentId);
+      if (found) { targetAttachment = found; break; }
+    }
+    if (!targetAttachment) {
+      return res.status(404).json({ message: 'Attachment not found' });
+    }
+
+    const filename = targetAttachment.originalName || 'file';
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    // Local storage: stream file back with download headers
+    if (targetAttachment.storage === 'local' && targetAttachment.path) {
+      if (!fs.existsSync(targetAttachment.path)) {
+        return res.status(404).json({ message: 'File not found on disk' });
+      }
+
+      // Optional: expose filename for fetch->blob flows on FE
+      res.setHeader('X-Filename', encodeURIComponent(filename));
+
+      // Let Express handle headers + stream
+      return res.download(targetAttachment.path, filename);
+    }
+
+    // Remote storage: pass through to the public URL (or upgrade later to signed URL)
+    if (targetAttachment.url) {
+      // Note: 302 after POST will switch to GET on most clients/browsers.
+      return res.redirect(302, targetAttachment.url);
+    }
+
+    return res.status(500).json({ message: 'Attachment is not downloadable' });
+  } catch (err) {
+    console.error('downloadAttachment (POST) error:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };

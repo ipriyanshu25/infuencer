@@ -1,23 +1,3 @@
-// // routes/emailRoutes.js
-// const express = require("express");
-// const multer = require("multer");
-// const { ocrImages } = require("../controllers/emailController");
-
-// const router = express.Router();
-
-// // keep files in memory; allow up to 5 images
-// const upload = multer({
-//   storage: multer.memoryStorage(),
-//   limits: { files: 5 }
-// });
-
-// // POST /api/ocr  (field name: images) – upload up to 5 at once
-// router.post("/extract", upload.array("images", 5), ocrImages);
-
-// module.exports = router;
-
-// routes/emailRoutes.js
-
 // routes/emailRoutes.js
 'use strict';
 

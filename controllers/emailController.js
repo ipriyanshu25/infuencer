@@ -1,5 +1,4 @@
 // controllers/emailController.js
-// controllers/emailController.js
 'use strict';
 
 require('dotenv').config();
@@ -19,7 +18,7 @@ const httpAgent = new Agent({
 const USE_SHARP = process.env.USE_SHARP !== '0';
 let sharp = null;
 if (USE_SHARP) {
-  try { sharp = require('sharp'); } catch {}
+  try { sharp = require('sharp'); } catch { /* optional */ }
 }
 
 // ---- Optional JSON repair: `npm i jsonrepair` ----
@@ -38,12 +37,10 @@ const TEMP            = Number(process.env.TEMPERATURE || 0);
 const TIMEOUT_MS      = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
 const MAX_IMG_W       = Number(process.env.MAX_IMAGE_WIDTH || 1280);
 const MAX_IMG_H       = Number(process.env.MAX_IMAGE_HEIGHT || 1280);
-const IMAGE_DETAIL    = (process.env.IMAGE_DETAIL || 'low'); // 'low'|'auto' (hint for remote URLs)
+const IMAGE_DETAIL    = (process.env.IMAGE_DETAIL || 'low'); // 'low'|'auto'
 const ENABLE_CACHE    = process.env.ENABLE_CACHE !== '0';
 const CACHE_TTL_MS    = Number(process.env.CACHE_TTL_MS || 5 * 60_000);
 const AGGRESSIVE_RACE = process.env.AGGRESSIVE_RACE === '1';
-
-// ---- Dark-mode enhancement (auto) ----
 const ENABLE_DARK_ENHANCE = process.env.ENABLE_DARK_ENHANCE !== '0'; // default ON
 
 // ---------- Regex ----------
@@ -96,6 +93,20 @@ const USER_INSTRUCTIONS =
   'Return only JSON. If the “More info” section is not present, set `more_info` to empty arrays/strings (no fallback to any other section).';
 
 // ---------- Helpers ----------
+const PLATFORM_MAP = new Map([
+  ['youtube','youtube'], ['yt','youtube'], ['yT','youtube'],
+  ['instagram','instagram'], ['ig','instagram'],
+  ['twitter','twitter'], ['x','twitter'],
+  ['tiktok','tiktok'], ['tt','tiktok'],
+  ['facebook','facebook'], ['fb','facebook'],
+  ['other','other']
+]);
+function normalizePlatform(p) {
+  if (!p) return null;
+  const key = String(p).trim().toLowerCase();
+  return PLATFORM_MAP.get(key) || null;
+}
+
 function guessMime(p) {
   const ext = (p && path.extname(p).toLowerCase()) || '';
   if (ext === '.png')  return 'image/png';
@@ -117,8 +128,7 @@ function uniqueSorted(arr = []) {
 function hashString(s) { return crypto.createHash('sha256').update(String(s)).digest('hex'); }
 function now() { return Date.now(); }
 
-// In-memory cache (store ONLY parse result, never DB outcome)
-const CACHE = new Map();
+const CACHE = new Map(); // cache ONLY parsed output (never DB results)
 function cacheGet(key) {
   if (!ENABLE_CACHE) return null;
   const v = CACHE.get(key); if (!v) return null;
@@ -260,6 +270,10 @@ async function callVisionFast(imagePart) {
   }
 }
 
+function escapeRegex(str = '') {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // ---------- Post-processing & normalization ----------
 function extractYouTube(fieldsArray = [], raw = '') {
   for (const kv of fieldsArray) {
@@ -316,14 +330,16 @@ function shapeForClient(parsed) {
 }
 
 // ---------- Persistence (returns outcome so caller can mark errors) ----------
-async function persistMoreInfo(normalized) {
+async function persistMoreInfo(normalized, platform) {
   const email  = normalized?.email  ? normalized.email.toLowerCase().trim()  : null;
   const handle = normalized?.handle ? normalized.handle.toLowerCase().trim() : null;
 
+  if (!platform) return { outcome: 'invalid', message: 'Platform is required.' };
   if (!email || !handle || !/^@[A-Za-z0-9._\-]+$/.test(handle)) {
     return { outcome: 'invalid', message: 'No valid email or @handle found under more_info.' };
   }
 
+  // Duplicate checks (global on email/handle)
   const [byEmail, byHandle] = await Promise.all([
     EmailContact.findOne({ email }).lean(),
     EmailContact.findOne({ handle }).lean()
@@ -338,7 +354,7 @@ async function persistMoreInfo(normalized) {
   if (byEmail)  return { outcome: 'duplicate', message: 'Email is already present in the database.', emailId: byEmail._id };
   if (byHandle) return { outcome: 'duplicate', message: 'User handle is already present in the database.', handleId: byHandle._id };
 
-  const doc = await EmailContact.create({ email, handle });
+  const doc = await EmailContact.create({ email, handle, platform });
   return { outcome: 'saved', id: doc._id };
 }
 
@@ -346,6 +362,11 @@ async function persistMoreInfo(normalized) {
 async function extractEmailsAndHandlesBatch(req, res) {
   try {
     if (!OPENAI_API_KEY) throw new Error('Missing OPENAI_API_KEY');
+
+    // platform applies to ALL screenshots in this request
+    const platform = normalizePlatform(req.body?.platform);
+    // If you want to allow missing platform, comment the next line to just set 'other' by default
+    // if (!platform) return res.status(400).json({ status: 'error', message: 'Platform is required. Use one of: youtube, instagram, twitter, tiktok, facebook, other.' });
 
     const tasks = [];
 
@@ -365,19 +386,18 @@ async function extractEmailsAndHandlesBatch(req, res) {
             cacheSet(cacheKey, shaped); // cache ONLY parsed shape
           }
 
-          // Captcha → return as error for this screenshot
           if (shaped.has_captcha) {
             return { error: 'Captcha detected. Skipping database save.', has_captcha: true };
           }
 
-          const dbRes = await persistMoreInfo(shaped.normalized);
+          const dbRes = await persistMoreInfo(shaped.normalized, platform || 'other');
           if (dbRes.outcome === 'saved') {
-            return { has_captcha: false, more_info: shaped.more_info, db: { saved: true, id: dbRes.id } };
+            return { has_captcha: false, platform: platform || 'other', more_info: shaped.more_info, db: { saved: true, id: dbRes.id } };
           } else {
-            // mark this screenshot as error (duplicate/invalid)
             return {
               error: dbRes.message,
               has_captcha: false,
+              platform: platform || 'other',
               more_info: shaped.more_info,
               normalized: shaped.normalized,
               details: dbRes
@@ -406,11 +426,11 @@ async function extractEmailsAndHandlesBatch(req, res) {
             if (shaped.has_captcha) {
               return { error: 'Captcha detected. Skipping database save.', has_captcha: true };
             }
-            const dbRes = await persistMoreInfo(shaped.normalized);
+            const dbRes = await persistMoreInfo(shaped.normalized, platform || 'other');
             if (dbRes.outcome === 'saved') {
-              return { has_captcha: false, more_info: shaped.more_info, db: { saved: true, id: dbRes.id } };
+              return { has_captcha: false, platform: platform || 'other', more_info: shaped.more_info, db: { saved: true, id: dbRes.id } };
             } else {
-              return { error: dbRes.message, has_captcha: false, more_info: shaped.more_info, normalized: shaped.normalized, details: dbRes };
+              return { error: dbRes.message, has_captcha: false, platform: platform || 'other', more_info: shaped.more_info, normalized: shaped.normalized, details: dbRes };
             }
           } catch (e) {
             return { error: e?.message || 'Failed to process this image URL.' };
@@ -436,11 +456,11 @@ async function extractEmailsAndHandlesBatch(req, res) {
             if (shaped.has_captcha) {
               return { error: 'Captcha detected. Skipping database save.', has_captcha: true };
             }
-            const dbRes = await persistMoreInfo(shaped.normalized);
+            const dbRes = await persistMoreInfo(shaped.normalized, platform || 'other');
             if (dbRes.outcome === 'saved') {
-              return { has_captcha: false, more_info: shaped.more_info, db: { saved: true, id: dbRes.id } };
+              return { has_captcha: false, platform: platform || 'other', more_info: shaped.more_info, db: { saved: true, id: dbRes.id } };
             } else {
-              return { error: dbRes.message, has_captcha: false, more_info: shaped.more_info, normalized: shaped.normalized, details: dbRes };
+              return { error: dbRes.message, has_captcha: false, platform: platform || 'other', more_info: shaped.more_info, normalized: shaped.normalized, details: dbRes };
             }
           } catch (e) {
             return { error: e?.message || 'Failed to process this image path.' };
@@ -462,4 +482,57 @@ async function extractEmailsAndHandlesBatch(req, res) {
   }
 }
 
-module.exports = { extractEmailsAndHandlesBatch };
+// ---------- GET /email/all (with optional ?platform=&page=&limit=) ----------
+async function getAllEmailContacts(req, res) {
+  try {
+    const body = req.body || {};
+
+    const page  = Math.max(1, parseInt(body.page ?? '1', 10));
+    const limit = Math.min(200, Math.max(1, parseInt(body.limit ?? '50', 10)));
+
+    const search = typeof body.search === 'string' ? body.search.trim() : '';
+
+    const query = {};
+    if (search) {
+      // Allow searching with or without leading '@' for handle; also search email + platform
+      const needleRaw = search;
+      const needleNoAt = search.startsWith('@') ? search.slice(1) : search;
+
+      const rxRaw   = escapeRegex(needleRaw);
+      const rxNoAt  = escapeRegex(needleNoAt);
+
+      query.$or = [
+        { email:    { $regex: rxNoAt, $options: 'i' } },        // email fragment
+        { handle:   { $regex: rxRaw.startsWith('@') ? rxRaw : `@${rxNoAt}`, $options: 'i' } }, // handle fragment
+        { platform: { $regex: rxNoAt, $options: 'i' } }         // platform fragment
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      EmailContact.find(query)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .select({ email: 1, handle: 1, platform: 1, _id: 0 })  // <-- ONLY these fields
+        .lean(),
+      EmailContact.countDocuments(query)
+    ]);
+
+    return res.json({
+      page,
+      limit,
+      total,
+      hasNext: page * limit < total,
+      data: items
+    });
+  } catch (err) {
+    console.error('getAllEmailContactsPost error:', err);
+    return res.status(400).json({ status: 'error', message: err?.message || 'Failed to fetch contacts.' });
+  }
+}
+
+
+module.exports = {
+  extractEmailsAndHandlesBatch,
+  getAllEmailContacts
+};

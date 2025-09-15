@@ -4,7 +4,7 @@
 require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
-const { extractEmailsAndHandlesBatch } = require('../controllers/emailController');
+const { extractEmailsAndHandlesBatch ,getAllEmailContacts} = require('../controllers/emailController');
 
 const router = express.Router();
 
@@ -32,6 +32,7 @@ function capToFive(req, _res, next) {
 
 // ---- Batch only: up to 5 images ----
 router.post('/extract-batch', acceptAnyUpload, capToFive, extractEmailsAndHandlesBatch);
+router.post('/all', getAllEmailContacts);
 
 // Optional: health
 router.get('/health', (_req, res) => res.json({ status: 'ok' }));

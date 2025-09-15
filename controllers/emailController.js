@@ -1,4 +1,5 @@
 // controllers/emailController.js
+// controllers/emailController.js
 'use strict';
 
 require('dotenv').config();
@@ -18,7 +19,7 @@ const httpAgent = new Agent({
 const USE_SHARP = process.env.USE_SHARP !== '0';
 let sharp = null;
 if (USE_SHARP) {
-  try { sharp = require('sharp'); } catch { /* sharp not installed */ }
+  try { sharp = require('sharp'); } catch {}
 }
 
 // ---- Optional JSON repair: `npm i jsonrepair` ----
@@ -42,10 +43,17 @@ const ENABLE_CACHE    = process.env.ENABLE_CACHE !== '0';
 const CACHE_TTL_MS    = Number(process.env.CACHE_TTL_MS || 5 * 60_000);
 const AGGRESSIVE_RACE = process.env.AGGRESSIVE_RACE === '1';
 
-// ---------- Regex ----------
-const YT_RE = /(https?:\/\/)?(www\.)?youtube\.com\/@[A-Za-z0-9._\-]+/i;
+// ---- Dark-mode enhancement (auto) ----
+const ENABLE_DARK_ENHANCE = process.env.ENABLE_DARK_ENHANCE !== '0'; // default ON
 
-// ---------- Response JSON Schema (for model) ----------
+// ---------- Regex ----------
+const EMAIL_RX       = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+const HANDLE_IN_TEXT = /@[A-Za-z0-9._\-]+/g;
+const YT_HANDLE_RX   = /\/@([A-Za-z0-9._\-]+)/i;
+const IG_RX          = /(?:instagram\.com|ig\.me)\/([A-Za-z0-9._\-]+)/i;
+const TW_RX          = /(?:twitter\.com|x\.com)\/([A-Za-z0-9._\-]+)/i;
+
+// ---------- JSON schema (More-info only) ----------
 const SECTION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -65,7 +73,6 @@ const SECTION_SCHEMA = {
   },
   required: ['emails', 'handles', 'fields', 'raw_text']
 };
-
 const RESPONSE_SCHEMA = {
   schema: {
     type: 'object',
@@ -84,8 +91,7 @@ const SYSTEM_MSG =
   'You extract text from a screenshot of a YouTube channel “About” popover and return strict JSON. ' +
   'If a visible reCAPTCHA checkbox (“I’m not a robot” with the reCAPTCHA logo) exists: set has_captcha=true and a brief rejection_reason. ' +
   'Otherwise: only include the content under the “More info” heading, in a `more_info` object with emails, handles, fields, raw_text. ' +
-  'Return JSON only.';
-
+  'Return JSON only. In `handles`, include ONLY plain handles that start with "@" (no URLs). Lowercase is fine.';
 const USER_INSTRUCTIONS =
   'Return only JSON. If the “More info” section is not present, set `more_info` to empty arrays/strings (no fallback to any other section).';
 
@@ -96,84 +102,78 @@ function guessMime(p) {
   if (ext === '.webp') return 'image/webp';
   return 'image/jpeg';
 }
-
 function bufferToDataUrl(buf, mime = 'image/jpeg') {
   const b64 = Buffer.from(buf).toString('base64');
   return `data:${mime};base64,${b64}`;
 }
-
 function uniqueSorted(arr = []) {
-  const seen = new Set();
-  const out = [];
+  const seen = new Set(); const out = [];
   for (const s of arr) {
-    const k = (s || '').trim();
-    if (!k) continue;
-    const low = k.toLowerCase();
-    if (!seen.has(low)) {
-      seen.add(low);
-      out.push(k);
-    }
+    const k = (s || '').trim(); if (!k) continue;
+    const low = k.toLowerCase(); if (!seen.has(low)) { seen.add(low); out.push(k); }
   }
   return out;
 }
-
-async function maybeDownscale(buffer, mime) {
-  if (!sharp) return buffer;
-  try {
-    const img = sharp(buffer, { failOn: 'none' });
-    const meta = await img.metadata();
-    const w = meta.width || 0, h = meta.height || 0;
-    if (w === 0 || h === 0) return buffer;
-
-    if (w > MAX_IMG_W || h > MAX_IMG_H) {
-      const resized = img.resize({ width: MAX_IMG_W, height: MAX_IMG_H, fit: 'inside', withoutEnlargement: true });
-      const out = mime.includes('png') ? resized.png({ compressionLevel: 6 }) : resized.jpeg({ quality: 80 });
-      return await out.toBuffer();
-    }
-    return buffer;
-  } catch { return buffer; }
-}
-
-function hashString(s) {
-  return crypto.createHash('sha256').update(s).digest('hex');
-}
+function hashString(s) { return crypto.createHash('sha256').update(String(s)).digest('hex'); }
 function now() { return Date.now(); }
 
-// ---- In-memory cache ----
+// In-memory cache (store ONLY parse result, never DB outcome)
 const CACHE = new Map();
 function cacheGet(key) {
   if (!ENABLE_CACHE) return null;
-  const v = CACHE.get(key);
-  if (!v) return null;
+  const v = CACHE.get(key); if (!v) return null;
   if (now() - v.ts > CACHE_TTL_MS) { CACHE.delete(key); return null; }
   return v.data;
 }
 function cacheSet(key, data) {
   if (!ENABLE_CACHE) return;
   CACHE.set(key, { ts: now(), data });
-  if (CACHE.size > 500) {
-    for (const k of CACHE.keys()) { CACHE.delete(k); if (CACHE.size <= 400) break; }
-  }
+  if (CACHE.size > 500) { for (const k of CACHE.keys()) { CACHE.delete(k); if (CACHE.size <= 400) break; } }
 }
 
-// ---------- Build image input ----------
+async function enhanceIfDark(buffer) {
+  if (!sharp || !ENABLE_DARK_ENHANCE) return buffer;
+  try {
+    const img = sharp(buffer, { failOn: 'none' });
+    const stats = await img.stats();
+    const means = stats.channels.slice(0, 3).map(c => c.mean || 0);
+    const avg = means.reduce((a,b)=>a+b,0)/(means.length||1);
+    if (avg < 85) {
+      return await sharp(buffer).modulate({ brightness: 1.35, saturation: 1.08 }).gamma(1.05).toBuffer();
+    }
+    return buffer;
+  } catch { return buffer; }
+}
+async function preprocessImage(buffer, mime) {
+  if (!sharp) return buffer;
+  try {
+    let img = sharp(buffer, { failOn: 'none' });
+    const meta = await img.metadata();
+    const w = meta.width || 0, h = meta.height || 0;
+    if (w > MAX_IMG_W || h > MAX_IMG_H) {
+      img = img.resize({ width: MAX_IMG_W, height: MAX_IMG_H, fit: 'inside', withoutEnlargement: true });
+    }
+    const buf = await (mime.includes('png') ? img.png({ compressionLevel: 6 }) : img.jpeg({ quality: 80 })).toBuffer();
+    return await enhanceIfDark(buf);
+  } catch { return await enhanceIfDark(buffer); }
+}
 async function imagePartFromBuffer(buffer, mimetype) {
   const mime = mimetype || 'image/jpeg';
-  const buf  = await maybeDownscale(buffer, mime);
+  const buf  = await preprocessImage(buffer, mime);
   return { type: 'input_image', image_url: bufferToDataUrl(buf, mime) };
 }
 async function imagePartFromPath(absPath) {
   if (!fs.existsSync(absPath)) throw new Error(`File not found: ${absPath}`);
   const mime = guessMime(absPath);
   const buf0 = fs.readFileSync(absPath);
-  const buf  = await maybeDownscale(buf0, mime);
+  const buf  = await preprocessImage(buf0, mime);
   return { type: 'input_image', image_url: bufferToDataUrl(buf, mime) };
 }
 function imagePartFromUrl(url) {
   return { type: 'input_image', image_url: { url: String(url), detail: IMAGE_DETAIL } };
 }
 
-// ---------- Responses API helpers ----------
+// ---------- OpenAI helpers ----------
 function extractOutputText(data) {
   if (data?.output && Array.isArray(data.output)) {
     for (const o of data.output) {
@@ -194,28 +194,20 @@ function extractOutputText(data) {
   }
   return '';
 }
-
 function safeJSONParse(input) {
   if (input && typeof input === 'object') return input;
   if (typeof input !== 'string') throw new Error('Expected JSON string');
-
   let t = input.trim();
   t = t.replace(/```(?:json)?/gi, '').replace(/```/g, '').replace(/^\uFEFF/, '').replace(/[\u200B-\u200D\u2060]/g, '').trim();
   const first = t.indexOf('{'); const last = t.lastIndexOf('}');
   if (first !== -1 && last !== -1 && first < last) t = t.slice(first, last + 1);
-  t = t.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'");
-  t = t.replace(/,\s*([}\]])/g, '$1');
-
+  t = t.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/,\s*([}\]])/g, '$1');
   try { return JSON.parse(t); }
   catch {
-    if (jsonrepairFn) {
-      const repaired = jsonrepairFn(t);
-      return JSON.parse(repaired);
-    }
+    if (jsonrepairFn) return JSON.parse(jsonrepairFn(t));
     throw new Error(`Invalid JSON after repair attempts. Preview: ${t.slice(0, 200)}…`);
   }
 }
-
 function makeBody(imagePart, model, maxTokens) {
   return {
     model,
@@ -223,75 +215,52 @@ function makeBody(imagePart, model, maxTokens) {
       { role: 'system', content: [{ type: 'input_text', text: SYSTEM_MSG }] },
       { role: 'user',   content: [{ type: 'input_text', text: USER_INSTRUCTIONS }, imagePart] }
     ],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'YouTubeAboutExtraction',
-        schema: RESPONSE_SCHEMA.schema,
-        strict: true
-      }
-    },
+    text: { format: { type: 'json_schema', name: 'YouTubeAboutExtraction', schema: RESPONSE_SCHEMA.schema, strict: true } },
     temperature: TEMP,
     max_output_tokens: maxTokens
   };
 }
-
 async function callOpenAI(body, timeoutMs) {
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(new Error('OpenAI timeout')), timeoutMs);
+  const ac = new AbortController(); const t = setTimeout(() => ac.abort(new Error('OpenAI timeout')), timeoutMs);
   try {
     const r = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       dispatcher: httpAgent,
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: ac.signal
     });
-    if (!r.ok) {
-      const errText = await r.text().catch(() => '');
-      throw new Error(`OpenAI ${r.status}: ${errText || r.statusText}`);
-    }
+    if (!r.ok) { const errText = await r.text().catch(() => ''); throw new Error(`OpenAI ${r.status}: ${errText || r.statusText}`); }
     const data = await r.json();
     const text = extractOutputText(data);
     if (!text) throw new Error('Empty output from OpenAI.');
     return text;
   } finally { clearTimeout(t); }
 }
-
 function isValidStructured(result) {
   if (!result || typeof result !== 'object') return false;
   return ['has_captcha', 'rejection_reason', 'more_info'].every(k => k in result);
 }
-
 async function tryOnce(imagePart, model, tokens) {
   const txt = await callOpenAI(makeBody(imagePart, model, tokens), TIMEOUT_MS);
   const parsed = safeJSONParse(txt);
   if (!isValidStructured(parsed)) throw new Error('Invalid structured output');
   return parsed;
 }
-
 async function callVisionFast(imagePart) {
   if (AGGRESSIVE_RACE) {
-    const pPrimary = (async () => {
-      try { return await tryOnce(imagePart, MODEL_PRIMARY, PRIMARY_TOKENS); }
-      catch { return await tryOnce(imagePart, MODEL_PRIMARY, RETRY_TOKENS); }
-    })();
+    const pPrimary = (async () => { try { return await tryOnce(imagePart, MODEL_PRIMARY, PRIMARY_TOKENS); } catch { return await tryOnce(imagePart, MODEL_PRIMARY, RETRY_TOKENS); } })();
     const pFallback = tryOnce(imagePart, MODEL_FALLBACK, RETRY_TOKENS).catch(() => null);
     const winner = await Promise.any([pPrimary, pFallback].map(p => p.catch(() => Promise.reject())));
     return winner;
   } else {
     try { return await tryOnce(imagePart, MODEL_PRIMARY, PRIMARY_TOKENS); }
-    catch {
-      try { return await tryOnce(imagePart, MODEL_PRIMARY, RETRY_TOKENS); }
-      catch { return await tryOnce(imagePart, MODEL_FALLBACK, RETRY_TOKENS); }
-    }
+    catch { try { return await tryOnce(imagePart, MODEL_PRIMARY, RETRY_TOKENS); }
+      catch { return await tryOnce(imagePart, MODEL_FALLBACK, RETRY_TOKENS); } }
   }
 }
 
-// ---------- Post-processing ----------
+// ---------- Post-processing & normalization ----------
 function extractYouTube(fieldsArray = [], raw = '') {
   for (const kv of fieldsArray) {
     const k = (kv?.key || '').toLowerCase();
@@ -299,32 +268,60 @@ function extractYouTube(fieldsArray = [], raw = '') {
       return kv.value.trim();
     }
   }
-  const m = raw.match(YT_RE);
+  const m = raw.match(/(https?:\/\/)?(www\.)?youtube\.com\/@[A-Za-z0-9._\-]+/i);
   return m ? (m[0].replace(/^https?:\/\//i, '').replace(/^www\./i, 'www.')) : null;
 }
-
+function firstValidEmail(emailsArr = [], raw = '') {
+  const norm = (emailsArr || []).flatMap(s => (String(s || '').match(EMAIL_RX) || []));
+  if (norm.length) return norm[0].toLowerCase();
+  const fromRaw = (raw || '').match(EMAIL_RX);
+  return fromRaw ? fromRaw[0].toLowerCase() : null;
+}
+function deriveHandleFromMi(mi = {}) {
+  for (const h of (mi.handles || [])) {
+    const s = String(h || '');
+    const m = s.match(HANDLE_IN_TEXT);
+    if (m && m[0]) return m[0].toLowerCase();
+    const my = s.match(YT_HANDLE_RX);
+    if (my && my[1]) return `@${my[1].toLowerCase()}`;
+  }
+  if (mi.YouTube) {
+    const my = String(mi.YouTube).match(YT_HANDLE_RX);
+    if (my && my[1]) return `@${my[1].toLowerCase()}`;
+  }
+  const r = String(mi.raw_text || '').match(HANDLE_IN_TEXT);
+  if (r && r[0]) return r[0].toLowerCase();
+  const big = [...((mi.fields || []).map(kv => `${kv.key}: ${kv.value}`)), String(mi.raw_text || '')].join('\n');
+  let m = big.match(IG_RX); if (m && m[1]) return `@${m[1].toLowerCase()}`;
+  m = big.match(TW_RX); if (m && m[1]) return `@${m[1].toLowerCase()}`;
+  return null;
+}
 function shapeForClient(parsed) {
   const has_captcha = !!parsed?.has_captcha;
   const mi = parsed?.more_info || {};
-
-  const more_info = {
+  const cleaned = {
     emails:  uniqueSorted(mi.emails || []),
     handles: uniqueSorted(mi.handles || []),
-    YouTube: extractYouTube(mi.fields || [], mi.raw_text || '') || null
+    YouTube: extractYouTube(mi.fields || [], mi.raw_text || '') || null,
+    raw_text: mi.raw_text || '',
+    fields: mi.fields || []
   };
-
-  return { has_captcha, more_info };
+  const email  = firstValidEmail(cleaned.emails, cleaned.raw_text);
+  const handle = deriveHandleFromMi({ ...cleaned });
+  return {
+    has_captcha,
+    more_info: { emails: cleaned.emails, handles: cleaned.handles, YouTube: cleaned.YouTube },
+    normalized: { email, handle }
+  };
 }
 
-// ---------- Persistence (store only first email/handle from more_info) ----------
-async function persistMoreInfo(more_info) {
-  if (!more_info) return { saved: false, message: 'No more_info to store.' };
+// ---------- Persistence (returns outcome so caller can mark errors) ----------
+async function persistMoreInfo(normalized) {
+  const email  = normalized?.email  ? normalized.email.toLowerCase().trim()  : null;
+  const handle = normalized?.handle ? normalized.handle.toLowerCase().trim() : null;
 
-  const email  = (more_info.emails  && more_info.emails[0])  ? more_info.emails[0].toLowerCase().trim()  : null;
-  const handle = (more_info.handles && more_info.handles[0]) ? more_info.handles[0].toLowerCase().trim() : null;
-
-  if (!email || !handle) {
-    return { saved: false, message: 'Missing email or handle under more_info.' };
+  if (!email || !handle || !/^@[A-Za-z0-9._\-]+$/.test(handle)) {
+    return { outcome: 'invalid', message: 'No valid email or @handle found under more_info.' };
   }
 
   const [byEmail, byHandle] = await Promise.all([
@@ -334,19 +331,15 @@ async function persistMoreInfo(more_info) {
 
   if (byEmail && byHandle) {
     if (byEmail._id?.toString() === byHandle._id?.toString()) {
-      return { saved: false, message: 'User handle and email are already present in the database.', id: byEmail._id };
+      return { outcome: 'duplicate', message: 'User handle and email are already present in the database.', id: byEmail._id };
     }
-    return { saved: false, message: 'Email and handle already exist (in different records).', emailId: byEmail._id, handleId: byHandle._id };
+    return { outcome: 'duplicate', message: 'Email and handle already exist (in different records).', emailId: byEmail._id, handleId: byHandle._id };
   }
-  if (byEmail) {
-    return { saved: false, message: 'Email is already present in the database.', emailId: byEmail._id };
-  }
-  if (byHandle) {
-    return { saved: false, message: 'User handle is already present in the database.', handleId: byHandle._id };
-  }
+  if (byEmail)  return { outcome: 'duplicate', message: 'Email is already present in the database.', emailId: byEmail._id };
+  if (byHandle) return { outcome: 'duplicate', message: 'User handle is already present in the database.', handleId: byHandle._id };
 
   const doc = await EmailContact.create({ email, handle });
-  return { saved: true, id: doc._id };
+  return { outcome: 'saved', id: doc._id };
 }
 
 // ---------- Batch ONLY (up to 5 images) ----------
@@ -358,27 +351,38 @@ async function extractEmailsAndHandlesBatch(req, res) {
 
     // 1) multipart files
     const files = Array.isArray(req.files) ? req.files : [];
-    const selectedFiles = files
-      .filter(f => /^image\/(png|jpe?g|webp)$/i.test(f.mimetype || ''))
-      .slice(0, 5);
+    const selectedFiles = files.filter(f => /^image\/(png|jpe?g|webp)$/i.test(f.mimetype || '')).slice(0, 5);
 
     for (const f of selectedFiles) {
       tasks.push((async () => {
         try {
           const imagePart = await imagePartFromBuffer(f.buffer, f.mimetype);
-          const cacheKey = hashString(`b1|${f.originalname}|${f.size}|${MODEL_PRIMARY}|${MODEL_FALLBACK}|${PRIMARY_TOKENS}|${RETRY_TOKENS}|${IMAGE_DETAIL}|v-no-normal`);
-          const cached = cacheGet(cacheKey);
-          if (cached) return cached;
+          const cacheKey = hashString(`p|${f.originalname}|${f.size}|${MODEL_PRIMARY}|${MODEL_FALLBACK}|${PRIMARY_TOKENS}|${RETRY_TOKENS}|${IMAGE_DETAIL}|darkenhance`);
+          let shaped = cacheGet(cacheKey);
+          if (!shaped) {
+            const parsed = await callVisionFast(imagePart);
+            shaped = shapeForClient(parsed);
+            cacheSet(cacheKey, shaped); // cache ONLY parsed shape
+          }
 
-          const parsed = await callVisionFast(imagePart);
-          const payload = shapeForClient(parsed);
+          // Captcha → return as error for this screenshot
+          if (shaped.has_captcha) {
+            return { error: 'Captcha detected. Skipping database save.', has_captcha: true };
+          }
 
-          let db = { saved: false, message: 'Captcha detected. Skipping database save.' };
-          if (!payload.has_captcha) db = await persistMoreInfo(payload.more_info);
-
-          const out = { ...payload, db };
-          cacheSet(cacheKey, out);
-          return out;
+          const dbRes = await persistMoreInfo(shaped.normalized);
+          if (dbRes.outcome === 'saved') {
+            return { has_captcha: false, more_info: shaped.more_info, db: { saved: true, id: dbRes.id } };
+          } else {
+            // mark this screenshot as error (duplicate/invalid)
+            return {
+              error: dbRes.message,
+              has_captcha: false,
+              more_info: shaped.more_info,
+              normalized: shaped.normalized,
+              details: dbRes
+            };
+          }
         } catch (e) {
           return { error: e?.message || 'Failed to process this image.' };
         }
@@ -392,19 +396,22 @@ async function extractEmailsAndHandlesBatch(req, res) {
         tasks.push((async () => {
           try {
             const imagePart = imagePartFromUrl(u);
-            const cacheKey = hashString(`b2|${u}|${MODEL_PRIMARY}|${MODEL_FALLBACK}|${PRIMARY_TOKENS}|${RETRY_TOKENS}|${IMAGE_DETAIL}|v-no-normal`);
-            const cached = cacheGet(cacheKey);
-            if (cached) return cached;
-
-            const parsed = await callVisionFast(imagePart);
-            const payload = shapeForClient(parsed);
-
-            let db = { saved: false, message: 'Captcha detected. Skipping database save.' };
-            if (!payload.has_captcha) db = await persistMoreInfo(payload.more_info);
-
-            const out = { ...payload, db };
-            cacheSet(cacheKey, out);
-            return out;
+            const cacheKey = hashString(`purl|${u}|${MODEL_PRIMARY}|${MODEL_FALLBACK}|${PRIMARY_TOKENS}|${RETRY_TOKENS}|${IMAGE_DETAIL}|darkenhance`);
+            let shaped = cacheGet(cacheKey);
+            if (!shaped) {
+              const parsed = await callVisionFast(imagePart);
+              shaped = shapeForClient(parsed);
+              cacheSet(cacheKey, shaped);
+            }
+            if (shaped.has_captcha) {
+              return { error: 'Captcha detected. Skipping database save.', has_captcha: true };
+            }
+            const dbRes = await persistMoreInfo(shaped.normalized);
+            if (dbRes.outcome === 'saved') {
+              return { has_captcha: false, more_info: shaped.more_info, db: { saved: true, id: dbRes.id } };
+            } else {
+              return { error: dbRes.message, has_captcha: false, more_info: shaped.more_info, normalized: shaped.normalized, details: dbRes };
+            }
           } catch (e) {
             return { error: e?.message || 'Failed to process this image URL.' };
           }
@@ -419,19 +426,22 @@ async function extractEmailsAndHandlesBatch(req, res) {
         tasks.push((async () => {
           try {
             const imagePart = await imagePartFromPath(path.resolve(String(pth)));
-            const cacheKey = hashString(`b3|${pth}|${MODEL_PRIMARY}|${MODEL_FALLBACK}|${PRIMARY_TOKENS}|${RETRY_TOKENS}|${IMAGE_DETAIL}|v-no-normal`);
-            const cached = cacheGet(cacheKey);
-            if (cached) return cached;
-
-            const parsed = await callVisionFast(imagePart);
-            const payload = shapeForClient(parsed);
-
-            let db = { saved: false, message: 'Captcha detected. Skipping database save.' };
-            if (!payload.has_captcha) db = await persistMoreInfo(payload.more_info);
-
-            const out = { ...payload, db };
-            cacheSet(cacheKey, out);
-            return out;
+            const cacheKey = hashString(`ppath|${pth}|${MODEL_PRIMARY}|${MODEL_FALLBACK}|${PRIMARY_TOKENS}|${RETRY_TOKENS}|${IMAGE_DETAIL}|darkenhance`);
+            let shaped = cacheGet(cacheKey);
+            if (!shaped) {
+              const parsed = await callVisionFast(imagePart);
+              shaped = shapeForClient(parsed);
+              cacheSet(cacheKey, shaped);
+            }
+            if (shaped.has_captcha) {
+              return { error: 'Captcha detected. Skipping database save.', has_captcha: true };
+            }
+            const dbRes = await persistMoreInfo(shaped.normalized);
+            if (dbRes.outcome === 'saved') {
+              return { has_captcha: false, more_info: shaped.more_info, db: { saved: true, id: dbRes.id } };
+            } else {
+              return { error: dbRes.message, has_captcha: false, more_info: shaped.more_info, normalized: shaped.normalized, details: dbRes };
+            }
           } catch (e) {
             return { error: e?.message || 'Failed to process this image path.' };
           }
@@ -452,11 +462,7 @@ async function extractEmailsAndHandlesBatch(req, res) {
   }
 }
 
-module.exports = {
-  extractEmailsAndHandlesBatch
-};
-
-
+module.exports = { extractEmailsAndHandlesBatch };
 
 
 

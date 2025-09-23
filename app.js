@@ -1,15 +1,15 @@
 // app.js
 require('dotenv').config();
 
-const express = require('express');
-const cors = require('cors');
-const mongoose = require('mongoose');
-const http = require('http');
+const express   = require('express');
+const cors      = require('cors');
+const mongoose  = require('mongoose');
+const http      = require('http');
 const WebSocket = require('ws');
-const path = require('path');
+const path      = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-// ─── ROUTES ───────────────────────────────────────────────────────────────
+// Routes ... (unchanged)
 const influencerRoutes    = require('./routes/influencerRoutes');
 const countryRoutes       = require('./routes/countryRoutes');
 const brandRoutes         = require('./routes/brandRoutes');
@@ -17,34 +17,37 @@ const campaignRoutes      = require('./routes/campaignRoutes');
 const interestRoutes      = require('./routes/interestRoutes');
 const audienceRoutes      = require('./routes/audienceRoutes');
 const applyCampaingRoutes = require('./routes/applyCampaingRoutes');
-const contractRoutes = require('./routes/contractRoutes');
-const milestoneRoutes = require('./routes/milestoneRoutes');
-const subscriptionRoutes = require('./routes/subscriptionRoutes');
-const paymentRoutes = require('./routes/paymentRoutes');
-const chatRoutes = require('./routes/chatRoutes');
-const adminRoutes = require('./routes/adminRoutes');
-const policyRoutes = require('./routes/policyRoutes');
-const contactRoutes = require('./routes/contactRoutes');
-const faqsRoutes = require('./routes/faqsRoutes');
-const dashboardRoutes = require('./routes/dashboardRoutes');
-const platformRoutes = require('./routes/platformRoutes');
+const contractRoutes      = require('./routes/contractRoutes');
+const milestoneRoutes     = require('./routes/milestoneRoutes');
+const subscriptionRoutes  = require('./routes/subscriptionRoutes');
+const paymentRoutes       = require('./routes/paymentRoutes');
+const chatRoutes          = require('./routes/chatRoutes');
+const adminRoutes         = require('./routes/adminRoutes');
+const policyRoutes        = require('./routes/policyRoutes');
+const contactRoutes       = require('./routes/contactRoutes');
+const faqsRoutes          = require('./routes/faqsRoutes');
+const dashboardRoutes     = require('./routes/dashboardRoutes');
+const platformRoutes      = require('./routes/platformRoutes');
 const audienceRangeRoutes = require('./routes/audiencerangeRoutes');
-const invitationRoutes = require('./routes/invitationRoutes');
-const filtersRoutes = require('./routes/filterRoutes');
-const mediaKitRoutes = require('./routes/mediaKitRoutes');
-const modashRoutes = require('./routes/modashRoutes');
+const invitationRoutes    = require('./routes/invitationRoutes');
+const filtersRoutes       = require('./routes/filterRoutes');
+const mediaKitRoutes      = require('./routes/mediaKitRoutes');
+const modashRoutes        = require('./routes/modashRoutes');
 
-// ─── MODELS ───────────────────────────────────────────────────────────────
+// Models needed inside WS handlers
 const ChatRoom = require('./models/chat');
 
-// ─── APP/WS SETUP ─────────────────────────────────────────────────────────
 const app    = express();
 const server = http.createServer(app);
 
-// Serve static uploads
+/* -------------------------------------------------
+   Serve static uploads so attachment URLs work
+------------------------------------------------- */
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// ─── WEBSOCKET SERVER ─────────────────────────────────────────────────────
+/* -------------------------------------------------
+   WebSocket (ws) setup
+------------------------------------------------- */
 const wss   = new WebSocket.Server({ server, path: '/ws' });
 const rooms = new Map(); // roomId -> Set<ws>
 
@@ -58,7 +61,7 @@ function broadcastToRoom(roomId, payloadString) {
   }
 }
 
-// Heartbeat for dead connections
+// Optional heartbeat to terminate dead connections
 function noop() {}
 function heartbeat() { this.isAlive = true; }
 
@@ -68,9 +71,9 @@ function makeReplySnapshot(room, replyTo) {
   if (!target) return null;
   const firstAtt = target.attachments?.[0];
   return {
-    messageId: target.messageId,
-    senderId: target.senderId,
-    text: (target.text || '').slice(0, 200),
+    messageId:  target.messageId,
+    senderId:   target.senderId,
+    text:       (target.text || '').slice(0, 200),
     hasAttachment: !!firstAtt,
     attachment: firstAtt ? {
       originalName: firstAtt.originalName,
@@ -102,6 +105,7 @@ wss.on('connection', (ws) => {
         joinedRoom = roomId;
         if (!rooms.has(roomId)) rooms.set(roomId, new Set());
         rooms.get(roomId).add(ws);
+        // (optional) send ack
         ws.send(JSON.stringify({ type: 'joined', roomId }));
         break;
       }
@@ -111,10 +115,15 @@ wss.on('connection', (ws) => {
         if (!roomId || !senderId || (!text && (!attachments || attachments.length === 0))) return;
 
         const room = await ChatRoom.findOne({ roomId });
-        if (!room) return;
-
+        if (!room) {
+          console.warn(`WS: room ${roomId} not found`);
+          return;
+        }
         const isMember = room.participants.some(p => p.userId === senderId);
-        if (!isMember) return;
+        if (!isMember) {
+          console.warn(`WS: sender ${senderId} not in room ${roomId}`);
+          return;
+        }
 
         const reply = makeReplySnapshot(room, replyTo);
 
@@ -155,6 +164,7 @@ wss.on('connection', (ws) => {
       }
 
       case 'typing': {
+        // optional typing indicator
         const { roomId, senderId, isTyping } = data;
         if (!roomId || !senderId) return;
         const payload = JSON.stringify({
@@ -180,7 +190,7 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Ping clients every 30s
+// ping clients every 30s
 const interval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) return ws.terminate();
@@ -191,42 +201,25 @@ const interval = setInterval(() => {
 
 wss.on('close', () => clearInterval(interval));
 
-// Expose WS helpers
+/* Expose helpers to controllers */
 app.set('wss', wss);
 app.set('wsRooms', rooms);
 app.set('broadcastToRoom', broadcastToRoom);
 
-// ─── CORS CONFIG ──────────────────────────────────────────────────────────
-const allowedOrigins = (process.env.FRONTEND_ORIGIN || '')
-  .split(',')
-  .map(o => o.trim())
-  .filter(Boolean);
-
-if (!allowedOrigins.length) {
-  allowedOrigins.push(
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'https://mhd.sharemitra.com',
-    'https://collabglam.com'
-  );
-}
-
-console.log('✅ Allowed origins:', allowedOrigins);
-
+/* -------------------------------------------------
+   Express middleware
+------------------------------------------------- */
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true); // allow tools like Postman
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error(`❌ Not allowed by CORS: ${origin}`));
-  },
-  credentials: true,
-}));
+  origin: process.env.FRONTEND_ORIGIN || 'https://collabglam.com',
 
-// ─── EXPRESS MIDDLEWARE ───────────────────────────────────────────────────
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ─── REST ROUTES ─────────────────────────────────────────────────────────
+/* -------------------------------------------------
+   REST routes
+------------------------------------------------- */
 app.use('/influencer', influencerRoutes);
 app.use('/country', countryRoutes);
 app.use('/brand', brandRoutes);
@@ -251,7 +244,9 @@ app.use('/filters', filtersRoutes);
 app.use('/media-kit', mediaKitRoutes);
 app.use('/modash', modashRoutes);
 
-// ─── DB CONNECTION + SERVER START ─────────────────────────────────────────
+/* -------------------------------------------------
+  Mongo & start
+------------------------------------------------- */
 const PORT = process.env.PORT || 5000;
 
 mongoose.connect(process.env.MONGODB_URI)

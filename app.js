@@ -1,43 +1,43 @@
 // app.js
 require('dotenv').config();
 
-const express   = require('express');
-const cors      = require('cors');
-const mongoose  = require('mongoose');
-const http      = require('http');
+const express = require('express');
+const cors = require('cors');
+const mongoose = require('mongoose');
+const http = require('http');
 const WebSocket = require('ws');
-const path      = require('path');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 // Routes ... (unchanged)
-const influencerRoutes    = require('./routes/influencerRoutes');
-const countryRoutes       = require('./routes/countryRoutes');
-const brandRoutes         = require('./routes/brandRoutes');
-const campaignRoutes      = require('./routes/campaignRoutes');
-const interestRoutes      = require('./routes/interestRoutes');
-const audienceRoutes      = require('./routes/audienceRoutes');
+const influencerRoutes = require('./routes/influencerRoutes');
+const countryRoutes = require('./routes/countryRoutes');
+const brandRoutes = require('./routes/brandRoutes');
+const campaignRoutes = require('./routes/campaignRoutes');
+const interestRoutes = require('./routes/interestRoutes');
+const audienceRoutes = require('./routes/audienceRoutes');
 const applyCampaingRoutes = require('./routes/applyCampaingRoutes');
-const contractRoutes      = require('./routes/contractRoutes');
-const milestoneRoutes     = require('./routes/milestoneRoutes');
-const subscriptionRoutes  = require('./routes/subscriptionRoutes');
-const paymentRoutes       = require('./routes/paymentRoutes');
-const chatRoutes          = require('./routes/chatRoutes');
-const adminRoutes         = require('./routes/adminRoutes');
-const policyRoutes        = require('./routes/policyRoutes');
-const contactRoutes       = require('./routes/contactRoutes');
-const faqsRoutes          = require('./routes/faqsRoutes');
-const dashboardRoutes     = require('./routes/dashboardRoutes');
-const platformRoutes      = require('./routes/platformRoutes');
+const contractRoutes = require('./routes/contractRoutes');
+const milestoneRoutes = require('./routes/milestoneRoutes');
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
+const chatRoutes = require('./routes/chatRoutes');
+const adminRoutes = require('./routes/adminRoutes');
+const policyRoutes = require('./routes/policyRoutes');
+const contactRoutes = require('./routes/contactRoutes');
+const faqsRoutes = require('./routes/faqsRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes');
+const platformRoutes = require('./routes/platformRoutes');
 const audienceRangeRoutes = require('./routes/audiencerangeRoutes');
-const invitationRoutes    = require('./routes/invitationRoutes');
-const filtersRoutes       = require('./routes/filterRoutes');
-const mediaKitRoutes      = require('./routes/mediaKitRoutes');
-const modashRoutes        = require('./routes/modashRoutes');
+const invitationRoutes = require('./routes/invitationRoutes');
+const filtersRoutes = require('./routes/filterRoutes');
+const mediaKitRoutes = require('./routes/mediaKitRoutes');
+const modashRoutes = require('./routes/modashRoutes');
 
 // Models needed inside WS handlers
 const ChatRoom = require('./models/chat');
 
-const app    = express();
+const app = express();
 const server = http.createServer(app);
 
 /* -------------------------------------------------
@@ -48,7 +48,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 /* -------------------------------------------------
    WebSocket (ws) setup
 ------------------------------------------------- */
-const wss   = new WebSocket.Server({ server, path: '/ws' });
+const wss = new WebSocket.Server({ server, path: '/ws' });
 const rooms = new Map(); // roomId -> Set<ws>
 
 function broadcastToRoom(roomId, payloadString) {
@@ -62,7 +62,7 @@ function broadcastToRoom(roomId, payloadString) {
 }
 
 // Optional heartbeat to terminate dead connections
-function noop() {}
+function noop() { }
 function heartbeat() { this.isAlive = true; }
 
 function makeReplySnapshot(room, replyTo) {
@@ -71,9 +71,9 @@ function makeReplySnapshot(room, replyTo) {
   if (!target) return null;
   const firstAtt = target.attachments?.[0];
   return {
-    messageId:  target.messageId,
-    senderId:   target.senderId,
-    text:       (target.text || '').slice(0, 200),
+    messageId: target.messageId,
+    senderId: target.senderId,
+    text: (target.text || '').slice(0, 200),
     hasAttachment: !!firstAtt,
     attachment: firstAtt ? {
       originalName: firstAtt.originalName,
@@ -210,8 +210,10 @@ app.set('broadcastToRoom', broadcastToRoom);
    Express middleware
 ------------------------------------------------- */
 app.use(cors({
-  // origin: process.env.FRONTEND_ORIGIN || 'http://localhost:3000',
-  origin: process.env.FRONTEND_ORIGIN || 'https://collabglam.com',
+  origin: process.env.FRONTEND_ORIGIN || [
+    'https://collabglam.com',
+    'https://www.collabglam.com'
+  ],
 
   credentials: true
 }));

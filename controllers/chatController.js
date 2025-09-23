@@ -6,7 +6,6 @@ const mime = require('mime-types');
 const sizeOf = require('image-size');
 const multer = require('multer');
 
-
 const ChatRoom       = require('../models/chat');
 const Brand          = require('../models/brand');
 const Influencer     = require('../models/influencer');
@@ -35,9 +34,9 @@ function makeReplySnapshot(room, replyTo) {
   if (!target) return null;
   const firstAtt = target.attachments?.[0];
   return {
-    messageId:  target.messageId,
-    senderId:   target.senderId,
-    text:       (target.text || '').slice(0, 200),
+    messageId: target.messageId,
+    senderId: target.senderId,
+    text: (target.text || '').slice(0, 200),
     hasAttachment: !!firstAtt,
     attachment: firstAtt ? {
       originalName: firstAtt.originalName,
@@ -92,8 +91,8 @@ exports.createRoom = async (req, res) => {
     }
 
     const participants = [
-      { userId: brandId,      name: brand.name, role: 'brand' },
-      { userId: influencerId, name: infl.name,  role: 'influencer' }
+      { userId: brandId, name: brand.name, role: 'brand' },
+      { userId: influencerId, name: infl.name, role: 'influencer' }
     ].sort(sortParticipants);
 
     // find if both ids already present
@@ -135,9 +134,9 @@ exports.getRooms = async (req, res) => {
     const summary = rooms.map(room => {
       const last = room.messages[room.messages.length - 1] || null;
       return {
-        roomId:       room.roomId,
+        roomId: room.roomId,
         participants: room.participants,
-        lastMessage:  last
+        lastMessage: last
       };
     });
 
@@ -384,7 +383,7 @@ exports.deleteMessage = async (req, res) => {
     // Try to unlink local attachments
     for (const att of (msg.attachments || [])) {
       if (att.storage === 'local' && att.path) {
-        fs.promises.unlink(att.path).catch(() => {}); // ignore errors
+        fs.promises.unlink(att.path).catch(() => { }); // ignore errors
       }
     }
 

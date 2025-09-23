@@ -9,7 +9,7 @@ const WebSocket = require('ws');
 const path      = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-// Routes ... (unchanged)
+// ─── ROUTES ───────────────────────────────────────────────────────────────
 const influencerRoutes    = require('./routes/influencerRoutes');
 const countryRoutes       = require('./routes/countryRoutes');
 const brandRoutes         = require('./routes/brandRoutes');
@@ -34,20 +34,17 @@ const filtersRoutes       = require('./routes/filterRoutes');
 const mediaKitRoutes      = require('./routes/mediaKitRoutes');
 const modashRoutes        = require('./routes/modashRoutes');
 
-// Models needed inside WS handlers
+// ─── MODELS ───────────────────────────────────────────────────────────────
 const ChatRoom = require('./models/chat');
 
+// ─── APP/WS SETUP ─────────────────────────────────────────────────────────
 const app    = express();
 const server = http.createServer(app);
 
-/* -------------------------------------------------
-   Serve static uploads so attachment URLs work
-------------------------------------------------- */
+// Serve static uploads
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-/* -------------------------------------------------
-   WebSocket (ws) setup
-------------------------------------------------- */
+// ─── WEBSOCKET SERVER ─────────────────────────────────────────────────────
 const wss   = new WebSocket.Server({ server, path: '/ws' });
 const rooms = new Map(); // roomId -> Set<ws>
 
@@ -61,7 +58,7 @@ function broadcastToRoom(roomId, payloadString) {
   }
 }
 
-// Optional heartbeat to terminate dead connections
+// Heartbeat for dead connections
 function noop() {}
 function heartbeat() { this.isAlive = true; }
 
@@ -105,7 +102,6 @@ wss.on('connection', (ws) => {
         joinedRoom = roomId;
         if (!rooms.has(roomId)) rooms.set(roomId, new Set());
         rooms.get(roomId).add(ws);
-        // (optional) send ack
         ws.send(JSON.stringify({ type: 'joined', roomId }));
         break;
       }
@@ -115,15 +111,10 @@ wss.on('connection', (ws) => {
         if (!roomId || !senderId || (!text && (!attachments || attachments.length === 0))) return;
 
         const room = await ChatRoom.findOne({ roomId });
-        if (!room) {
-          console.warn(`WS: room ${roomId} not found`);
-          return;
-        }
+        if (!room) return;
+
         const isMember = room.participants.some(p => p.userId === senderId);
-        if (!isMember) {
-          console.warn(`WS: sender ${senderId} not in room ${roomId}`);
-          return;
-        }
+        if (!isMember) return;
 
         const reply = makeReplySnapshot(room, replyTo);
 
@@ -164,7 +155,6 @@ wss.on('connection', (ws) => {
       }
 
       case 'typing': {
-        // optional typing indicator
         const { roomId, senderId, isTyping } = data;
         if (!roomId || !senderId) return;
         const payload = JSON.stringify({
@@ -190,7 +180,7 @@ wss.on('connection', (ws) => {
   });
 });
 
-// ping clients every 30s
+// Ping clients every 30s
 const interval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) return ws.terminate();
@@ -201,24 +191,42 @@ const interval = setInterval(() => {
 
 wss.on('close', () => clearInterval(interval));
 
-/* Expose helpers to controllers */
+// Expose WS helpers
 app.set('wss', wss);
 app.set('wsRooms', rooms);
 app.set('broadcastToRoom', broadcastToRoom);
 
-/* -------------------------------------------------
-   Express middleware
-------------------------------------------------- */
+// ─── CORS CONFIG ──────────────────────────────────────────────────────────
+const allowedOrigins = (process.env.FRONTEND_ORIGIN || '')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+if (!allowedOrigins.length) {
+  allowedOrigins.push(
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://mhd.sharemitra.com',
+    'https://collabglam.com'
+  );
+}
+
+console.log('✅ Allowed origins:', allowedOrigins);
+
 app.use(cors({
-  origin: process.env.FRONTEND_ORIGIN || ['http://localhost:3000', 'http://localhost:3001'],
-  credentials: true
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true); // allow tools like Postman
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`❌ Not allowed by CORS: ${origin}`));
+  },
+  credentials: true,
 }));
+
+// ─── EXPRESS MIDDLEWARE ───────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-/* -------------------------------------------------
-   REST routes
-------------------------------------------------- */
+// ─── REST ROUTES ─────────────────────────────────────────────────────────
 app.use('/influencer', influencerRoutes);
 app.use('/country', countryRoutes);
 app.use('/brand', brandRoutes);
@@ -243,9 +251,7 @@ app.use('/filters', filtersRoutes);
 app.use('/media-kit', mediaKitRoutes);
 app.use('/modash', modashRoutes);
 
-/* -------------------------------------------------
-  Mongo & start
-------------------------------------------------- */
+// ─── DB CONNECTION + SERVER START ─────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
 mongoose.connect(process.env.MONGODB_URI)
